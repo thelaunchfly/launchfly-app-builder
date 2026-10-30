@@ -1,0 +1,8 @@
+build/
+.dart_tool/
+android/
+ios/
+*.jks
+key.properties
+build.json
+result.json

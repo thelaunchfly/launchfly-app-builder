@@ -1,0 +1,113 @@
+name: Build app
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_id:
+        description: "LaunchFly build id"
+        required: true
+      server:
+        description: "LaunchFly base URL, e.g. https://nethviru.com/thelaunchfly"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ inputs.build_id }}
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      API: ${{ inputs.server }}/api/app-build/${{ inputs.build_id }}
+      SECRET: ${{ secrets.BUILD_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Report start
+        run: |
+          curl -fsS -X POST "$API/callback" -H "X-Build-Secret: $SECRET" -H "Content-Type: application/json" \
+            -d "{\"status\":\"building\",\"run_url\":\"$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID\"}"
+
+      - name: Fetch app config
+        run: |
+          curl -fsS "$API/config" -H "X-Build-Secret: $SECRET" -o build.json
+          jq '.app' build.json > assets/app_config.json
+          curl -fsSL "$(jq -r .icon_url build.json)" -o assets/icon.png
+          # Hide signing secrets from the public log
+          for k in store_pass key_pass; do v=$(jq -r ".keystore.$k // empty" build.json); [ -n "$v" ] && echo "::add-mask::$v"; done
+          echo "PKG=$(jq -r .package_id build.json)" >> $GITHUB_ENV
+          echo "VNAME=$(jq -r .version_name build.json)" >> $GITHUB_ENV
+          echo "VCODE=$(jq -r .version_code build.json)" >> $GITHUB_ENV
+          echo "SPLASH=$(jq -r .app.splash_color build.json)" >> $GITHUB_ENV
+          echo "APPNAME=$(jq -r .app.name build.json)" >> $GITHUB_ENV
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.24.5"
+          channel: stable
+          cache: true
+
+      - name: Create platform project
+        run: flutter create --platforms=android --org com.thelaunchfly --project-name launchfly_app .
+
+      - name: Signing key
+        run: |
+          if [ "$(jq -r '.keystore.b64 // empty' build.json)" != "" ]; then
+            jq -r .keystore.b64 build.json | base64 -d > android/app/upload.jks
+            STORE_PASS=$(jq -r .keystore.store_pass build.json); KEY_PASS=$(jq -r .keystore.key_pass build.json); ALIAS=$(jq -r .keystore.alias build.json)
+            echo "NEW_KEY=0" >> $GITHUB_ENV
+          else
+            STORE_PASS=$(openssl rand -hex 16); KEY_PASS=$STORE_PASS; ALIAS=upload
+            echo "::add-mask::$STORE_PASS"
+            keytool -genkeypair -v -keystore android/app/upload.jks -alias $ALIAS -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "$STORE_PASS" -keypass "$KEY_PASS" -dname "CN=$PKG, O=The LaunchFly"
+            echo "NEW_KEY=1" >> $GITHUB_ENV
+          fi
+          printf "storeFile=upload.jks\nstorePassword=%s\nkeyPassword=%s\nkeyAlias=%s\n" "$STORE_PASS" "$KEY_PASS" "$ALIAS" > android/key.properties
+          python3 tool/patch_android.py "$PKG" "$APPNAME"
+
+      - name: Icons & splash
+        run: |
+          sed -i "s/#ffffff/$SPLASH/g" pubspec.yaml
+          flutter pub get
+          dart run flutter_launcher_icons
+          dart run flutter_native_splash:create
+
+      - name: Build
+        run: |
+          flutter build apk --release --build-name "$VNAME" --build-number "$VCODE"
+          flutter build appbundle --release --build-name "$VNAME" --build-number "$VCODE"
+          mkdir out
+          cp build/app/outputs/flutter-apk/app-release.apk "out/app-$PKG-$VNAME.apk"
+          cp build/app/outputs/bundle/release/app-release.aab "out/app-$PKG-$VNAME.aab"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="build-${{ inputs.build_id }}-$GITHUB_RUN_ID"
+          gh release create "$TAG" out/* --title "$APPNAME $VNAME" --notes "Built by The LaunchFly"
+          BASE="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$TAG"
+          KS=""
+          if [ "$NEW_KEY" = "1" ]; then
+            KS=$(jq -n --arg b "$(base64 -w0 android/app/upload.jks)" --arg p "$(grep storePassword android/key.properties | cut -d= -f2)" \
+              '{b64:$b,store_pass:$p,key_pass:$p,alias:"upload"}')
+          fi
+          jq -n --arg apk "$BASE/app-$PKG-$VNAME.apk" --arg aab "$BASE/app-$PKG-$VNAME.aab" \
+            --arg run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --argjson ks "${KS:-null}" \
+            '{status:"success",apk_url:$apk,aab_url:$aab,run_url:$run,keystore:$ks}' > result.json
+          curl -fsS -X POST "$API/callback" -H "X-Build-Secret: $SECRET" -H "Content-Type: application/json" --data @result.json
+
+      - name: Report failure
+        if: failure()
+        run: |
+          curl -sS -X POST "$API/callback" -H "X-Build-Secret: $SECRET" -H "Content-Type: application/json" \
+            -d "{\"status\":\"failed\",\"run_url\":\"$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID\"}"

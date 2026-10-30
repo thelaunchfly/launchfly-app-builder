@@ -1,0 +1,10 @@
+{
+  "name": "LaunchFly App",
+  "url": "https://nethviru.com/thelaunchfly/",
+  "primary_color": "#6d28d9",
+  "splash_color": "#ffffff",
+  "pull_to_refresh": true,
+  "show_progress": true,
+  "open_external_in_browser": true,
+  "user_agent_suffix": "LaunchFlyApp"
+}
