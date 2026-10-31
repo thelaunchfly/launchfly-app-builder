@@ -6,3 +6,4 @@ ios/
 key.properties
 build.json
 result.json
+pubspec.lock
