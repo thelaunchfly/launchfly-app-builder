@@ -1,150 +1,191 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:google_mobile_ads/google_mobile_ads.dart';
 import 'package:http/http.dart' as http;
+import 'package:onesignal_flutter/onesignal_flutter.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
 
-Color hexColor(String? hex, Color fallback) {
-  if (hex == null || !RegExp(r'^#[0-9a-fA-F]{6}$').hasMatch(hex)) return fallback;
+Color hexColor(dynamic hex, Color fallback) {
+  if (hex is! String || !RegExp(r'^#[0-9a-fA-F]{6}$').hasMatch(hex)) return fallback;
   return Color(int.parse('FF${hex.substring(1)}', radix: 16));
 }
 
 const _icons = <String, IconData>{
-  'home': Icons.home_rounded, 'store': Icons.storefront_rounded, 'cart': Icons.shopping_cart_rounded,
-  'tag': Icons.local_offer_rounded, 'info': Icons.info_rounded, 'phone': Icons.call_rounded, 'mail': Icons.mail_rounded,
-  'person': Icons.person_rounded, 'search': Icons.search_rounded, 'heart': Icons.favorite_rounded,
-  'calendar': Icons.event_rounded, 'location': Icons.place_rounded, 'menu': Icons.menu_rounded, 'star': Icons.star_rounded,
-  'chat': Icons.chat_rounded, 'gallery': Icons.photo_library_rounded, 'news': Icons.article_rounded, 'settings': Icons.settings_rounded,
+  'home': Icons.home_rounded, 'store': Icons.storefront_rounded, 'cart': Icons.shopping_cart_rounded, 'tag': Icons.local_offer_rounded,
+  'info': Icons.info_rounded, 'phone': Icons.call_rounded, 'mail': Icons.mail_rounded, 'person': Icons.person_rounded,
+  'search': Icons.search_rounded, 'heart': Icons.favorite_rounded, 'calendar': Icons.event_rounded, 'location': Icons.place_rounded,
+  'menu': Icons.menu_rounded, 'star': Icons.star_rounded, 'chat': Icons.chat_rounded, 'gallery': Icons.photo_library_rounded,
+  'news': Icons.article_rounded, 'settings': Icons.settings_rounded, 'share': Icons.share_rounded, 'video': Icons.play_circle_rounded,
+  'music': Icons.music_note_rounded, 'school': Icons.school_rounded, 'work': Icons.work_rounded, 'help': Icons.help_rounded,
+  'bell': Icons.notifications_rounded, 'globe': Icons.public_rounded, 'lock': Icons.lock_rounded, 'gift': Icons.card_giftcard_rounded,
+  'reload': Icons.refresh_rounded,
 };
+IconData iconOf(dynamic n) => _icons[n] ?? Icons.circle_outlined;
 
 class NavItem {
-  NavItem(Map<String, dynamic> j)
-      : label = j['label'] as String? ?? '',
-        icon = _icons[j['icon']] ?? Icons.circle,
-        url = j['url'] as String? ?? '';
+  NavItem(Map j)
+      : label = '${j['label'] ?? j['title'] ?? ''}',
+        icon = iconOf(j['icon']),
+        url = '${j['url'] ?? ''}',
+        children = ((j['children'] as List?) ?? []).map((e) => NavItem(e as Map)).toList();
   final String label;
   final IconData icon;
   final String url;
+  final List<NavItem> children;
 }
 
-/// Everything the app needs: bundled at build time, refreshed from the server on every launch.
-class AppConfig {
-  AppConfig(this.raw);
+/// Bundled at build time, refreshed from The LaunchFly on every launch.
+class Cfg {
+  Cfg(this.raw);
   final Map<String, dynamic> raw;
+  Map get d => (raw['design'] as Map?) ?? {};
+  Map m(String k) => (d[k] as Map?) ?? {};
+  dynamic v(String k, String f, [dynamic def]) => m(k)[f] ?? def;
+  List<NavItem> items(String k, [String f = 'items']) => ((m(k)[f] as List?) ?? []).map((e) => NavItem(e as Map)).toList();
 
-  Map<String, dynamic> get d => (raw['design'] as Map?)?.cast<String, dynamic>() ?? {};
-  Map<String, dynamic> _m(String k) => (d[k] as Map?)?.cast<String, dynamic>() ?? {};
-  List<NavItem> _items(String k) => ((_m(k)['items'] as List?) ?? []).map((e) => NavItem((e as Map).cast<String, dynamic>())).toList();
-
-  String get name => raw['name'] as String? ?? 'App';
-  String get url => raw['url'] as String;
-  Color get primary => hexColor(raw['primary_color'] as String?, const Color(0xFF2563EB));
-  bool get openExternal => raw['open_external_in_browser'] as bool? ?? true;
-  String get uaSuffix => raw['user_agent_suffix'] as String? ?? 'LaunchFlyApp';
-  String? get remote => raw['remote_config'] as String?;
-  String get iconUrl => raw['icon'] as String? ?? '';
-
-  bool get header => _m('header')['enabled'] as bool? ?? false;
-  String get headerTitle => _m('header')['title'] as String? ?? name;
-  Color get headerBg => hexColor(_m('header')['bg'] as String?, primary);
-  Color get headerFg => hexColor(_m('header')['fg'] as String?, Colors.white);
-  bool get headerCenter => _m('header')['center'] as bool? ?? false;
-  bool get headerLogo => _m('header')['show_logo'] as bool? ?? false;
-  bool get bottomNav => (_m('bottom_nav')['enabled'] as bool? ?? false) && bottomItems.length >= 2;
-  bool get bottomIconsOnly => _m('bottom_nav')['style'] == 'icons';
-  List<NavItem> get bottomItems => _items('bottom_nav');
-  bool get drawer => (_m('drawer')['enabled'] as bool? ?? false) && drawerItems.isNotEmpty;
-  List<NavItem> get drawerItems => _items('drawer');
-  String get fabType => _m('fab')['type'] as String? ?? 'none';
-  String get fabValue => _m('fab')['value'] as String? ?? '';
-  Color get fabColor => hexColor(_m('fab')['color'] as String?, const Color(0xFF25D366));
-  String get loader => d['loader'] as String? ?? 'bar';
-  bool get refreshButton => d['pull_refresh'] as bool? ?? false;
-  bool get exitConfirm => d['exit_confirm'] as bool? ?? false;
-  bool get zoom => d['zoom'] as bool? ?? false;
-  bool get walkthrough => (_m('walkthrough')['enabled'] as bool? ?? false) && slides.isNotEmpty;
-  List<Map<String, dynamic>> get slides => ((_m('walkthrough')['slides'] as List?) ?? []).map((e) => (e as Map).cast<String, dynamic>()).toList();
-  String get offlineTitle => _m('offline')['title'] as String? ?? 'No internet connection';
-  String get offlineText => _m('offline')['text'] as String? ?? 'Check your connection and try again.';
+  String get name => '${raw['name'] ?? 'App'}';
+  String get url => '${raw['url']}';
+  Color get primary => hexColor(raw['primary_color'], const Color(0xFF2563EB));
+  String get iconUrl => '${raw['icon'] ?? ''}';
+  String get nav => '${v('nav', 'style', 'none')}';
+  bool get hasDrawer => nav == 'drawer' || nav == 'drawer_bottom';
+  bool get hasBottom => (nav == 'bottom' || nav == 'drawer_bottom') && items('bottom_nav').length >= 2;
+  bool get hasTabs => nav == 'tabs' && items('tabs').length >= 2;
+  List<NavItem> get pages => ((d['pages'] as List?) ?? []).map((e) => NavItem(e as Map)).toList();
 }
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final bundled = jsonDecode(await rootBundle.loadString('assets/app_config.json')) as Map<String, dynamic>;
   final prefs = await SharedPreferences.getInstance();
-  final cached = prefs.getString('remote_config');
   final merged = Map<String, dynamic>.from(bundled);
+  final cached = prefs.getString('remote_config');
   if (cached != null) {
     try {
       merged.addAll(jsonDecode(cached) as Map<String, dynamic>);
-      merged['remote_config'] = bundled['remote_config'];
     } catch (_) {}
   }
-  runApp(LaunchFlyApp(initial: AppConfig(merged), bundled: bundled, prefs: prefs));
+  final cfg = Cfg(merged);
+  if (cfg.v('ads', 'enabled', false) == true) {
+    unawaited(MobileAds.instance.initialize());
+  }
+  final osId = '${cfg.v('push', 'onesignal_app_id', '')}';
+  if (cfg.v('push', 'enabled', false) == true && osId.isNotEmpty) {
+    OneSignal.initialize(osId);
+    unawaited(OneSignal.Notifications.requestPermission(true));
+  }
+  runApp(LaunchFlyApp(initial: cfg, bundled: bundled, prefs: prefs));
 }
 
 class LaunchFlyApp extends StatefulWidget {
   const LaunchFlyApp({super.key, required this.initial, required this.bundled, required this.prefs});
-  final AppConfig initial;
+  final Cfg initial;
   final Map<String, dynamic> bundled;
   final SharedPreferences prefs;
-
   @override
   State<LaunchFlyApp> createState() => _LaunchFlyAppState();
 }
 
 class _LaunchFlyAppState extends State<LaunchFlyApp> {
-  late AppConfig cfg = widget.initial;
-  late bool showIntro = cfg.walkthrough && !(widget.prefs.getBool('intro_done') ?? false);
+  late Cfg cfg = widget.initial;
+  bool splash = true;
+  late bool intro = cfg.v('walkthrough', 'enabled', false) == true && !(widget.prefs.getBool('intro_done') ?? false);
+  final shellKey = GlobalKey<_ShellState>();
 
   @override
   void initState() {
     super.initState();
-    _refreshRemote();
+    _refresh();
+    Timer(const Duration(milliseconds: 1600), () => mounted ? setState(() => splash = false) : null);
+    if (cfg.v('push', 'enabled', false) == true && '${cfg.v('push', 'onesignal_app_id', '')}'.isNotEmpty) {
+      OneSignal.Notifications.addClickListener((e) {
+        final url = e.notification.additionalData?['url'];
+        if (url is String && url.isNotEmpty) shellKey.currentState?.open(url);
+      });
+    }
   }
 
-  /// Download the latest design; apply it immediately and remember it for the next launch.
-  Future<void> _refreshRemote() async {
+  Future<void> _refresh() async {
     final url = widget.bundled['remote_config'] as String?;
     if (url == null || url.isEmpty) return;
     try {
       final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 6));
       if (res.statusCode != 200) return;
-      final remote = jsonDecode(res.body) as Map<String, dynamic>;
       await widget.prefs.setString('remote_config', res.body);
-      final merged = Map<String, dynamic>.from(widget.bundled)..addAll(remote);
-      if (mounted) setState(() => cfg = AppConfig(merged));
-    } catch (_) {
-      // Offline or server unavailable: keep the cached/bundled design.
-    }
+      final merged = Map<String, dynamic>.from(widget.bundled)..addAll(jsonDecode(res.body) as Map<String, dynamic>);
+      if (mounted) setState(() => cfg = Cfg(merged));
+    } catch (_) {}
   }
 
   @override
   Widget build(BuildContext context) {
+    Widget home;
+    if (splash) {
+      home = SplashView(cfg: cfg);
+    } else if (intro) {
+      home = Walkthrough(cfg: cfg, onDone: () {
+        widget.prefs.setBool('intro_done', true);
+        setState(() => intro = false);
+      });
+    } else {
+      home = Shell(key: shellKey, cfg: cfg);
+    }
     return MaterialApp(
       title: cfg.name,
       debugShowCheckedModeBanner: false,
       theme: ThemeData(colorSchemeSeed: cfg.primary, useMaterial3: true),
-      home: showIntro
-          ? Walkthrough(cfg: cfg, onDone: () {
-              widget.prefs.setBool('intro_done', true);
-              setState(() => showIntro = false);
-            })
-          : WebShell(cfg: cfg),
+      home: AnimatedSwitcher(duration: const Duration(milliseconds: 400), child: home),
+    );
+  }
+}
+
+class SplashView extends StatelessWidget {
+  const SplashView({super.key, required this.cfg});
+  final Cfg cfg;
+  @override
+  Widget build(BuildContext context) {
+    final s = cfg.m('splash');
+    final c1 = hexColor(s['bg'], Colors.white);
+    final c2 = s['bg2'] is String && '${s['bg2']}'.isNotEmpty ? hexColor(s['bg2'], c1) : c1;
+    final img = '${s['image'] ?? ''}';
+    final tc = hexColor(s['title_color'], const Color(0xFF0F172A));
+    return Scaffold(
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(colors: [c1, c2], begin: Alignment.topLeft, end: Alignment.bottomRight),
+          image: img.isNotEmpty ? DecorationImage(image: NetworkImage(img), fit: BoxFit.cover) : null,
+        ),
+        alignment: Alignment.center,
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          if (s['show_logo'] != false && cfg.iconUrl.isNotEmpty)
+            ClipRRect(borderRadius: BorderRadius.circular(24), child: Image.network(cfg.iconUrl, width: 96, height: 96, errorBuilder: (_, __, ___) => const SizedBox())),
+          if (s['show_title'] != false) ...[
+            const SizedBox(height: 18),
+            Text('${s['title'] ?? cfg.name}', style: TextStyle(color: tc, fontSize: 24, fontWeight: FontWeight.w800)),
+          ],
+          if ('${s['tagline'] ?? ''}'.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text('${s['tagline']}', style: TextStyle(color: tc.withOpacity(.75))),
+          ],
+        ]),
+      ),
     );
   }
 }
 
 class Walkthrough extends StatefulWidget {
   const Walkthrough({super.key, required this.cfg, required this.onDone});
-  final AppConfig cfg;
+  final Cfg cfg;
   final VoidCallback onDone;
-
   @override
   State<Walkthrough> createState() => _WalkthroughState();
 }
@@ -152,135 +193,201 @@ class Walkthrough extends StatefulWidget {
 class _WalkthroughState extends State<Walkthrough> {
   final _pc = PageController();
   int _i = 0;
-
   @override
   Widget build(BuildContext context) {
-    final slides = widget.cfg.slides;
-    final last = _i == slides.length - 1;
+    final slides = ((widget.cfg.m('walkthrough')['slides'] as List?) ?? []).cast<Map>();
+    final style = '${widget.cfg.v('walkthrough', 'style', '1')}';
+    final last = _i >= slides.length - 1;
+    final p = widget.cfg.primary;
     return Scaffold(
-      body: SafeArea(
-        child: Column(children: [
-          Align(alignment: Alignment.topRight, child: TextButton(onPressed: widget.onDone, child: const Text('Skip'))),
-          Expanded(
-            child: PageView.builder(
-              controller: _pc,
-              itemCount: slides.length,
-              onPageChanged: (i) => setState(() => _i = i),
-              itemBuilder: (_, i) {
-                final s = slides[i];
-                final img = s['image'] as String? ?? '';
-                return Padding(
-                  padding: const EdgeInsets.all(32),
-                  child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                    if (img.isNotEmpty)
-                      ClipRRect(borderRadius: BorderRadius.circular(24), child: Image.network(img, height: 260, fit: BoxFit.cover, errorBuilder: (_, __, ___) => const SizedBox(height: 40)))
-                    else
-                      Icon(Icons.auto_awesome_rounded, size: 96, color: widget.cfg.primary),
-                    const SizedBox(height: 32),
-                    Text(s['title'] as String? ?? '', textAlign: TextAlign.center, style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w800)),
-                    const SizedBox(height: 12),
-                    Text(s['text'] as String? ?? '', textAlign: TextAlign.center, style: TextStyle(fontSize: 16, color: Colors.grey.shade700)),
-                  ]),
-                );
-              },
-            ),
-          ),
-          Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-            for (var k = 0; k < slides.length; k++)
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 250),
-                margin: const EdgeInsets.all(4),
-                width: k == _i ? 22 : 8, height: 8,
-                decoration: BoxDecoration(color: k == _i ? widget.cfg.primary : Colors.grey.shade300, borderRadius: BorderRadius.circular(8)),
+      body: Stack(children: [
+        PageView.builder(
+          controller: _pc,
+          itemCount: slides.length,
+          onPageChanged: (i) => setState(() => _i = i),
+          itemBuilder: (_, i) {
+            final s = slides[i];
+            final img = '${s['image'] ?? ''}';
+            final text = Column(mainAxisSize: MainAxisSize.min, children: [
+              Text('${s['title'] ?? ''}', textAlign: TextAlign.center, style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800, color: style == '2' ? Colors.white : null)),
+              const SizedBox(height: 12),
+              Text('${s['text'] ?? ''}', textAlign: TextAlign.center, style: TextStyle(fontSize: 16, color: style == '2' ? Colors.white70 : Colors.grey.shade700)),
+            ]);
+            if (style == '2' && img.isNotEmpty) {
+              return Container(
+                decoration: BoxDecoration(image: DecorationImage(image: NetworkImage(img), fit: BoxFit.cover, colorFilter: const ColorFilter.mode(Colors.black45, BlendMode.darken))),
+                padding: const EdgeInsets.fromLTRB(32, 32, 32, 160),
+                alignment: Alignment.bottomCenter,
+                child: text,
+              );
+            }
+            final media = img.isNotEmpty
+                ? ClipRRect(borderRadius: BorderRadius.circular(24), child: Image.network(img, height: 260, fit: BoxFit.cover, errorBuilder: (_, __, ___) => const SizedBox(height: 40)))
+                : Icon(Icons.auto_awesome_rounded, size: 96, color: p);
+            return SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(28, 40, 28, 160),
+                child: style == '3'
+                    ? Center(child: Card(elevation: 6, child: Padding(padding: const EdgeInsets.all(24), child: Column(mainAxisSize: MainAxisSize.min, children: [media, const SizedBox(height: 24), text]))))
+                    : Column(mainAxisAlignment: MainAxisAlignment.center, children: [media, const SizedBox(height: 32), text]),
               ),
-          ]),
-          Padding(
-            padding: const EdgeInsets.all(24),
-            child: SizedBox(
-              width: double.infinity, height: 52,
-              child: FilledButton(
-                style: FilledButton.styleFrom(backgroundColor: widget.cfg.primary),
-                onPressed: () => last ? widget.onDone() : _pc.nextPage(duration: const Duration(milliseconds: 350), curve: Curves.easeOut),
-                child: Text(last ? 'Get started' : 'Next'),
-              ),
-            ),
+            );
+          },
+        ),
+        Positioned(
+          left: 24, right: 24, bottom: 32,
+          child: SafeArea(
+            child: Column(children: [
+              Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                for (var k = 0; k < slides.length; k++)
+                  AnimatedContainer(duration: const Duration(milliseconds: 250), margin: const EdgeInsets.all(4), width: k == _i ? 22 : 8, height: 8,
+                      decoration: BoxDecoration(color: k == _i ? p : Colors.grey.shade300, borderRadius: BorderRadius.circular(8))),
+              ]),
+              const SizedBox(height: 16),
+              Row(children: [
+                TextButton(onPressed: widget.onDone, child: const Text('Skip')),
+                const Spacer(),
+                FilledButton(
+                  style: FilledButton.styleFrom(backgroundColor: p, minimumSize: const Size(140, 50)),
+                  onPressed: () => last ? widget.onDone() : _pc.nextPage(duration: const Duration(milliseconds: 350), curve: Curves.easeOut),
+                  child: Text(last ? 'Get started' : 'Next'),
+                ),
+              ]),
+            ]),
           ),
-        ]),
-      ),
+        ),
+      ]),
     );
   }
 }
 
-class WebShell extends StatefulWidget {
-  const WebShell({super.key, required this.cfg});
-  final AppConfig cfg;
-
+class Shell extends StatefulWidget {
+  const Shell({super.key, required this.cfg});
+  final Cfg cfg;
   @override
-  State<WebShell> createState() => _WebShellState();
+  State<Shell> createState() => _ShellState();
 }
 
-class _WebShellState extends State<WebShell> {
+class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
   late final WebViewController _web;
-  late final String _homeHost;
-  int _progress = 0;
+  late final String _host;
+  int _progress = 0, _tab = 0, _navCount = 0;
   bool _offline = false;
-  int _tab = 0;
+  BannerAd? _banner;
+  InterstitialAd? _inter;
+  TabController? _tabs;
 
-  AppConfig get c => widget.cfg;
+  Cfg get c => widget.cfg;
 
   @override
   void initState() {
     super.initState();
-    _homeHost = Uri.parse(c.url).host;
+    _host = Uri.parse(c.url).host;
+    if (c.hasTabs) {
+      _tabs = TabController(length: c.items('tabs').length, vsync: this)..addListener(() {
+          if (!_tabs!.indexIsChanging) open(c.items('tabs')[_tabs!.index].url);
+        });
+    }
     _web = WebViewController()
-      ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setBackgroundColor(Colors.white)
       ..setNavigationDelegate(NavigationDelegate(
         onProgress: (p) => setState(() => _progress = p),
         onPageStarted: (_) => setState(() => _offline = false),
+        onPageFinished: (_) => _injectHide(),
         onWebResourceError: (err) {
           if (err.isForMainFrame ?? true) setState(() => _offline = true);
         },
         onNavigationRequest: _onNavigate,
       ));
     _setup();
+    _loadAds();
   }
 
   Future<void> _setup() async {
+    final app = c.m('app');
+    await _web.setJavaScriptMode(app['javascript'] == false ? JavaScriptMode.disabled : JavaScriptMode.unrestricted);
     final ua = await _web.getUserAgent();
-    await _web.setUserAgent('${ua ?? ''} ${c.uaSuffix}'.trim());
+    final custom = '${app['user_agent'] ?? ''}'.trim();
+    await _web.setUserAgent(custom.isNotEmpty ? custom : '${ua ?? ''} LaunchFlyApp'.trim());
+    await _web.enableZoom(app['zoom'] == true);
+    if (app['clear_cookies'] == true) await WebViewCookieManager().clearCookies();
     final platform = _web.platform;
     if (platform is AndroidWebViewController) {
+      await platform.setMediaPlaybackRequiresUserGesture(false);
       await platform.setOnShowFileSelector((params) async {
         final images = params.acceptTypes.any((t) => t.startsWith('image/'));
-        final res = await FilePicker.platform.pickFiles(
-          type: images ? FileType.image : FileType.any,
-          allowMultiple: params.mode == FileSelectorMode.openMultiple,
-        );
+        final res = await FilePicker.platform.pickFiles(type: images ? FileType.image : FileType.any, allowMultiple: params.mode == FileSelectorMode.openMultiple);
         return res?.files.where((f) => f.path != null).map((f) => Uri.file(f.path!).toString()).toList() ?? <String>[];
       });
+      await platform.setOnPlatformPermissionRequest((req) async {
+        if (app['webrtc'] != true) return req.deny();
+        await [Permission.camera, Permission.microphone].request();
+        req.grant();
+      });
     }
-    await _web.enableZoom(c.zoom);
-    final start = c.bottomNav ? c.bottomItems.first.url : c.url;
+    final start = c.hasBottom ? c.items('bottom_nav').first.url : (c.hasTabs ? c.items('tabs').first.url : c.url);
     await _web.loadRequest(Uri.parse(start));
+  }
+
+  /// Hide the website's own header/footer inside the app (CSS selectors from the dashboard).
+  Future<void> _injectHide() async {
+    final h = c.m('hide_web');
+    final sel = [h['header'], h['footer']].where((s) => s is String && s.trim().isNotEmpty).join(',');
+    if (sel.isEmpty) return;
+    final css = jsonEncode('$sel{display:none!important}');
+    await _web.runJavaScript('(function(){var s=document.getElementById("lf-hide")||document.head.appendChild(Object.assign(document.createElement("style"),{id:"lf-hide"}));s.textContent=$css})();');
+  }
+
+  void _loadAds() {
+    final ads = c.m('ads');
+    if (ads['enabled'] != true) return;
+    final bid = '${ads['banner_id'] ?? ''}';
+    if (bid.isNotEmpty) {
+      _banner = BannerAd(adUnitId: bid, size: AdSize.banner, request: const AdRequest(), listener: BannerAdListener(
+        onAdLoaded: (_) => setState(() {}),
+        onAdFailedToLoad: (ad, _) { ad.dispose(); setState(() => _banner = null); },
+      ))..load();
+    }
+    _loadInter();
+  }
+
+  void _loadInter() {
+    final iid = '${c.v('ads', 'interstitial_id', '')}';
+    if (c.v('ads', 'enabled', false) != true || iid.isEmpty) return;
+    InterstitialAd.load(adUnitId: iid, request: const AdRequest(), adLoadCallback: InterstitialAdLoadCallback(
+      onAdLoaded: (ad) => _inter = ad,
+      onAdFailedToLoad: (_) => _inter = null,
+    ));
+  }
+
+  void _countNav() {
+    final every = (c.v('ads', 'tap_count', 0) as num?)?.toInt() ?? 0;
+    if (every <= 0 || _inter == null) return;
+    if (++_navCount % every == 0) {
+      _inter!.show();
+      _inter = null;
+      _loadInter();
+    }
   }
 
   NavigationDecision _onNavigate(NavigationRequest req) {
     final uri = Uri.tryParse(req.url);
     if (uri == null) return NavigationDecision.prevent;
     final isWeb = uri.scheme == 'http' || uri.scheme == 'https';
-    final sameSite = uri.host == _homeHost || uri.host.endsWith('.$_homeHost');
+    final same = uri.host == _host || uri.host.endsWith('.$_host');
     const inApp = ['checkout.stripe.com', 'www.paypal.com', 'www.sandbox.paypal.com'];
-    if (!isWeb || (c.openExternal && !sameSite && !inApp.contains(uri.host))) {
+    final external = c.m('app')['open_external'] != false;
+    if (!isWeb || (external && !same && !inApp.contains(uri.host))) {
       launchUrl(uri, mode: LaunchMode.externalApplication);
       return NavigationDecision.prevent;
     }
+    if (req.isMainFrame) _countNav();
     return NavigationDecision.navigate;
   }
 
-  Future<void> _open(String url) async {
+  Future<void> open(String url) async {
     final uri = Uri.tryParse(url);
-    if (uri == null) return;
+    if (uri == null || url.isEmpty) return;
     if (uri.scheme == 'http' || uri.scheme == 'https') {
       await _web.loadRequest(uri);
     } else {
@@ -288,15 +395,35 @@ class _WebShellState extends State<WebShell> {
     }
   }
 
+  void _share() => Share.share('${c.v('share', 'text', '') ?? ''}'.isNotEmpty ? '${c.v('share', 'text')}' : '${c.name} ${c.url}');
+
+  void _action(Map ri) {
+    switch ('${ri['action']}') {
+      case 'reload':
+        _web.reload();
+      case 'share':
+        _share();
+      case 'home':
+        open(c.url);
+      case 'back':
+        _web.goBack();
+      case 'url':
+        open('${ri['url']}');
+    }
+  }
+
   void _fab() {
-    final v = c.fabValue.trim();
-    switch (c.fabType) {
+    final f = c.m('fab');
+    final v = '${f['value'] ?? ''}'.trim();
+    switch ('${f['type']}') {
       case 'whatsapp':
         launchUrl(Uri.parse('https://wa.me/${v.replaceAll(RegExp(r'\D'), '')}'), mode: LaunchMode.externalApplication);
       case 'call':
         launchUrl(Uri.parse('tel:${v.replaceAll(RegExp(r'[^\d+]'), '')}'));
       case 'link':
-        _open(v);
+        open(v);
+      case 'share':
+        _share();
     }
   }
 
@@ -306,99 +433,223 @@ class _WebShellState extends State<WebShell> {
       await _web.goBack();
       return;
     }
-    if (!c.exitConfirm || !mounted) {
+    final e = c.m('exit');
+    if (e['enabled'] == false || !mounted) {
       await SystemNavigator.pop();
       return;
     }
+    final img = '${e['image'] ?? ''}';
     final leave = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('Close ${c.name}?'),
+        icon: img.isNotEmpty ? Image.network(img, height: 80, errorBuilder: (_, __, ___) => const SizedBox()) : null,
+        title: Text('${e['title'] ?? 'Do you want to exit?'}'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Stay')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Close')),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text('${e['no'] ?? 'No'}')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text('${e['yes'] ?? 'Yes'}')),
         ],
       ),
     );
     if (leave == true) await SystemNavigator.pop();
   }
 
+  PreferredSizeWidget? _appBar() {
+    final h = c.m('header');
+    if (h['enabled'] == false) return null;
+    final bg = hexColor(h['bg'], c.primary);
+    final bg2 = '${h['bg2'] ?? ''}'.isNotEmpty ? hexColor(h['bg2'], bg) : bg;
+    final fg = hexColor(h['fg'], Colors.white);
+    final left = '${h['left_icon'] ?? 'auto'}';
+    Widget? leading;
+    if (left == 'back') {
+      leading = IconButton(icon: const Icon(Icons.arrow_back_rounded), onPressed: () => _web.goBack());
+    } else if (left == 'home') {
+      leading = IconButton(icon: const Icon(Icons.home_rounded), onPressed: () => open(c.url));
+    }
+    return AppBar(
+      foregroundColor: fg,
+      backgroundColor: bg,
+      flexibleSpace: Container(decoration: BoxDecoration(gradient: LinearGradient(colors: [bg, bg2]))),
+      centerTitle: h['style'] == 'center',
+      automaticallyImplyLeading: c.hasDrawer && (left == 'auto' || left == 'menu'),
+      leading: leading,
+      title: Row(mainAxisSize: MainAxisSize.min, children: [
+        if (h['show_logo'] == true && c.iconUrl.isNotEmpty)
+          Padding(padding: const EdgeInsets.only(right: 10), child: ClipRRect(borderRadius: BorderRadius.circular(6), child: Image.network(c.iconUrl, width: 26, height: 26, errorBuilder: (_, __, ___) => const SizedBox()))),
+        Flexible(child: Text('${h['title'] ?? c.name}', overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w700))),
+      ]),
+      actions: [for (final ri in ((h['right_icons'] as List?) ?? []).cast<Map>()) IconButton(icon: Icon(iconOf(ri['icon'])), onPressed: () => _action(ri))],
+      bottom: c.hasTabs
+          ? TabBar(controller: _tabs, isScrollable: true, labelColor: fg, unselectedLabelColor: fg.withOpacity(.7), indicatorColor: fg, tabs: [
+              for (final t in c.items('tabs')) Tab(text: t.label, icon: c.v('tabs', 'style') == 'icon_title' ? Icon(t.icon) : null),
+            ])
+          : null,
+    );
+  }
+
+  Widget _drawerItem(NavItem it) {
+    if (it.children.isNotEmpty) {
+      return ExpansionTile(leading: Icon(it.icon, color: c.primary), title: Text(it.label), children: [for (final ch in it.children) _drawerItem(ch)]);
+    }
+    return ListTile(leading: Icon(it.icon, color: c.primary), title: Text(it.label), onTap: () {
+      Navigator.pop(context);
+      open(it.url);
+    });
+  }
+
+  Widget? _drawer() {
+    if (!c.hasDrawer) return null;
+    final about = c.m('about');
+    return Drawer(
+      child: ListView(padding: EdgeInsets.zero, children: [
+        DrawerHeader(
+          decoration: BoxDecoration(color: hexColor(c.v('drawer', 'header_bg'), c.primary)),
+          child: Row(children: [
+            if (c.iconUrl.isNotEmpty) ClipRRect(borderRadius: BorderRadius.circular(14), child: Image.network(c.iconUrl, width: 56, height: 56, errorBuilder: (_, __, ___) => const SizedBox())),
+            const SizedBox(width: 14),
+            Expanded(child: Text(c.name, style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800))),
+          ]),
+        ),
+        for (final it in c.items('drawer')) _drawerItem(it),
+        if (c.pages.isNotEmpty) const Divider(),
+        for (final pg in c.pages) ListTile(leading: const Icon(Icons.description_outlined), title: Text(pg.label), onTap: () { Navigator.pop(context); open(pg.url); }),
+        if (about['enabled'] == true)
+          ListTile(leading: const Icon(Icons.info_outline_rounded), title: const Text('About'), onTap: () {
+            Navigator.pop(context);
+            Navigator.push(context, MaterialPageRoute(builder: (_) => AboutView(cfg: c)));
+          }),
+        if (c.v('share', 'enabled', false) == true)
+          ListTile(leading: const Icon(Icons.share_rounded), title: const Text('Share app'), onTap: () { Navigator.pop(context); _share(); }),
+      ]),
+    );
+  }
+
+  @override
+  void dispose() {
+    _banner?.dispose();
+    _inter?.dispose();
+    _tabs?.dispose();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     final loading = _progress < 100;
+    final loader = c.m('loader');
+    final lc = hexColor(loader['color'], c.primary);
+    final fab = c.m('fab');
+    final off = c.m('offline');
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: _onBack,
       child: Scaffold(
         backgroundColor: Colors.white,
-        appBar: c.header
-            ? AppBar(
-                backgroundColor: c.headerBg,
-                foregroundColor: c.headerFg,
-                centerTitle: c.headerCenter,
-                automaticallyImplyLeading: c.drawer,
-                title: Row(mainAxisSize: MainAxisSize.min, children: [
-                  if (c.headerLogo && c.iconUrl.isNotEmpty)
-                    Padding(padding: const EdgeInsets.only(right: 10), child: ClipRRect(borderRadius: BorderRadius.circular(6), child: Image.network(c.iconUrl, width: 26, height: 26, errorBuilder: (_, __, ___) => const SizedBox()))),
-                  Flexible(child: Text(c.headerTitle, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w700))),
-                ]),
-                actions: [
-                  if (c.refreshButton) IconButton(icon: const Icon(Icons.refresh_rounded), onPressed: () => _web.reload()),
-                ],
-              )
-            : null,
-        drawer: c.drawer
-            ? Drawer(
-                child: SafeArea(
-                  child: ListView(children: [
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
-                      child: Text(c.name, style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: c.primary)),
-                    ),
-                    for (final it in c.drawerItems)
-                      ListTile(leading: Icon(it.icon, color: c.primary), title: Text(it.label), onTap: () {
-                        Navigator.pop(context);
-                        _open(it.url);
-                      }),
-                  ]),
-                ),
-              )
-            : null,
+        appBar: _appBar(),
+        drawer: _drawer(),
         body: SafeArea(
-          top: !c.header,
-          child: Stack(children: [
-            WebViewWidget(controller: _web),
-            if (loading && c.loader == 'bar')
-              LinearProgressIndicator(value: _progress / 100, color: c.primary, backgroundColor: Colors.transparent, minHeight: 3),
-            if (loading && c.loader == 'spinner')
-              Center(child: CircularProgressIndicator(color: c.primary)),
-            if (_offline) _OfflineView(color: c.primary, title: c.offlineTitle, text: c.offlineText, onRetry: () => _web.reload()),
+          top: c.m('header')['enabled'] == false,
+          child: Column(children: [
+            Expanded(
+              child: Stack(children: [
+                WebViewWidget(controller: _web),
+                if (loading && loader['style'] == 'bar') LinearProgressIndicator(value: _progress / 100, color: lc, backgroundColor: Colors.transparent, minHeight: 3),
+                if (loading && loader['style'] == 'spinner') Center(child: CircularProgressIndicator(color: lc)),
+                if (loading && loader['style'] == 'dots') Center(child: _Dots(color: lc)),
+                if (_offline) _OfflineView(color: c.primary, title: '${off['title'] ?? 'No internet connection'}', text: '${off['text'] ?? ''}', onRetry: () => _web.reload()),
+              ]),
+            ),
+            if (_banner != null) SizedBox(height: _banner!.size.height.toDouble(), width: double.infinity, child: AdWidget(ad: _banner!)),
           ]),
         ),
-        floatingActionButton: c.fabType == 'none'
+        floatingActionButton: fab['type'] == null || fab['type'] == 'none'
             ? null
-            : FloatingActionButton(
-                backgroundColor: c.fabColor,
-                foregroundColor: Colors.white,
-                onPressed: _fab,
-                child: Icon(c.fabType == 'call' ? Icons.call_rounded : c.fabType == 'whatsapp' ? Icons.chat_rounded : Icons.open_in_new_rounded),
-              ),
-        bottomNavigationBar: c.bottomNav
+            : (fab['style'] == 'extended'
+                ? FloatingActionButton.extended(backgroundColor: hexColor(fab['color'], Colors.green), foregroundColor: Colors.white, onPressed: _fab,
+                    icon: Icon(fab['type'] == 'call' ? Icons.call_rounded : Icons.chat_rounded), label: Text('${fab['label'] ?? ''}'))
+                : FloatingActionButton(backgroundColor: hexColor(fab['color'], Colors.green), foregroundColor: Colors.white, onPressed: _fab,
+                    child: Icon(fab['type'] == 'call' ? Icons.call_rounded : fab['type'] == 'share' ? Icons.share_rounded : Icons.chat_rounded))),
+        bottomNavigationBar: c.hasBottom
             ? NavigationBar(
-                selectedIndex: _tab.clamp(0, c.bottomItems.length - 1),
-                labelBehavior: c.bottomIconsOnly ? NavigationDestinationLabelBehavior.alwaysHide : NavigationDestinationLabelBehavior.alwaysShow,
+                selectedIndex: _tab.clamp(0, c.items('bottom_nav').length - 1),
+                labelBehavior: c.v('bottom_nav', 'style') == 'icons'
+                    ? NavigationDestinationLabelBehavior.alwaysHide
+                    : (c.v('bottom_nav', 'style') == 'selected' ? NavigationDestinationLabelBehavior.onlyShowSelected : NavigationDestinationLabelBehavior.alwaysShow),
                 indicatorColor: c.primary.withOpacity(.15),
                 onDestinationSelected: (i) {
                   setState(() => _tab = i);
-                  _open(c.bottomItems[i].url);
+                  open(c.items('bottom_nav')[i].url);
                 },
-                destinations: [
-                  for (final it in c.bottomItems)
-                    NavigationDestination(icon: Icon(it.icon), selectedIcon: Icon(it.icon, color: c.primary), label: it.label),
-                ],
+                destinations: [for (final it in c.items('bottom_nav')) NavigationDestination(icon: Icon(it.icon), selectedIcon: Icon(it.icon, color: c.primary), label: it.label)],
               )
             : null,
       ),
+    );
+  }
+}
+
+class AboutView extends StatelessWidget {
+  const AboutView({super.key, required this.cfg});
+  final Cfg cfg;
+  @override
+  Widget build(BuildContext context) {
+    final a = cfg.m('about');
+    final links = <(IconData, String, String)>[
+      (Icons.chat_rounded, 'WhatsApp', '${a['whatsapp'] ?? ''}'.isNotEmpty ? 'https://wa.me/${'${a['whatsapp']}'.replaceAll(RegExp(r'\D'), '')}' : ''),
+      (Icons.call_rounded, 'Call', '${a['phone'] ?? ''}'.isNotEmpty ? 'tel:${a['phone']}' : ''),
+      (Icons.mail_rounded, 'Email', '${a['email'] ?? ''}'.isNotEmpty ? 'mailto:${a['email']}' : ''),
+      (Icons.public_rounded, 'Website', '${a['website'] ?? ''}'),
+      (Icons.facebook_rounded, 'Facebook', '${a['facebook'] ?? ''}'),
+      (Icons.camera_alt_rounded, 'Instagram', '${a['instagram'] ?? ''}'),
+      (Icons.alternate_email_rounded, 'X / Twitter', '${a['twitter'] ?? ''}'),
+      (Icons.play_circle_rounded, 'YouTube', '${a['youtube'] ?? ''}'),
+      (Icons.music_note_rounded, 'TikTok', '${a['tiktok'] ?? ''}'),
+      (Icons.photo_camera_front_rounded, 'Snapchat', '${a['snapchat'] ?? ''}'),
+      (Icons.forum_rounded, 'Messenger', '${a['messenger'] ?? ''}'),
+      (Icons.video_call_rounded, 'Skype', '${a['skype'] ?? ''}'.isNotEmpty ? 'skype:${a['skype']}?chat' : ''),
+    ].where((l) => l.$3.isNotEmpty).toList();
+    return Scaffold(
+      appBar: AppBar(title: const Text('About'), backgroundColor: cfg.primary, foregroundColor: Colors.white),
+      body: ListView(padding: const EdgeInsets.all(24), children: [
+        if (cfg.iconUrl.isNotEmpty) Center(child: ClipRRect(borderRadius: BorderRadius.circular(24), child: Image.network(cfg.iconUrl, width: 96, height: 96, errorBuilder: (_, __, ___) => const SizedBox()))),
+        const SizedBox(height: 16),
+        Center(child: Text(cfg.name, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800))),
+        const SizedBox(height: 16),
+        if ('${a['text'] ?? ''}'.isNotEmpty) Text('${a['text']}', textAlign: TextAlign.center, style: TextStyle(color: Colors.grey.shade700, fontSize: 16)),
+        const SizedBox(height: 24),
+        for (final l in links)
+          Card(child: ListTile(leading: Icon(l.$1, color: cfg.primary), title: Text(l.$2), trailing: const Icon(Icons.chevron_right_rounded),
+              onTap: () => launchUrl(Uri.parse(l.$3), mode: LaunchMode.externalApplication))),
+      ]),
+    );
+  }
+}
+
+class _Dots extends StatefulWidget {
+  const _Dots({required this.color});
+  final Color color;
+  @override
+  State<_Dots> createState() => _DotsState();
+}
+
+class _DotsState extends State<_Dots> with SingleTickerProviderStateMixin {
+  late final AnimationController _a = AnimationController(vsync: this, duration: const Duration(milliseconds: 900))..repeat();
+  @override
+  void dispose() {
+    _a.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _a,
+      builder: (_, __) => Row(mainAxisSize: MainAxisSize.min, children: [
+        for (var i = 0; i < 3; i++)
+          Container(
+            margin: const EdgeInsets.all(4), width: 12, height: 12,
+            decoration: BoxDecoration(shape: BoxShape.circle, color: widget.color.withOpacity(((_a.value * 3 - i) % 3) < 1 ? 1 : .3)),
+          ),
+      ]),
     );
   }
 }
@@ -409,7 +660,6 @@ class _OfflineView extends StatelessWidget {
   final String title;
   final String text;
   final VoidCallback onRetry;
-
   @override
   Widget build(BuildContext context) {
     return Container(
