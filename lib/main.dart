@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ui' show ImageFilter;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -207,6 +208,16 @@ class LaunchFlyApp extends StatefulWidget {
   State<LaunchFlyApp> createState() => _LaunchFlyAppState();
 }
 
+/// The owner's brand colour is used exactly (buttons, links), not a generated tone.
+ThemeData _theme(Cfg cfg, Brightness b) {
+  final p = cfg.v('header', 'bg') is String ? hexColor(cfg.v('header', 'bg'), cfg.primary) : cfg.primary;
+  final on = p.computeLuminance() > .5 ? Colors.black : Colors.white;
+  // A very dark brand colour would vanish on a dark background, so dark mode lightens it.
+  final pd = b == Brightness.dark && p.computeLuminance() < .05 ? Colors.white : p;
+  final scheme = ColorScheme.fromSeed(seedColor: p, brightness: b).copyWith(primary: pd, onPrimary: pd == Colors.white ? Colors.black : on);
+  return ThemeData(colorScheme: scheme, useMaterial3: true);
+}
+
 class _LaunchFlyAppState extends State<LaunchFlyApp> with WidgetsBindingObserver {
   late Cfg cfg = widget.initial;
   bool splash = true;
@@ -276,8 +287,8 @@ class _LaunchFlyAppState extends State<LaunchFlyApp> with WidgetsBindingObserver
     return MaterialApp(
       title: cfg.name,
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(colorSchemeSeed: cfg.primary, useMaterial3: true),
-      darkTheme: ThemeData(colorSchemeSeed: cfg.primary, useMaterial3: true, brightness: Brightness.dark),
+      theme: _theme(cfg, Brightness.light),
+      darkTheme: _theme(cfg, Brightness.dark),
       themeMode: {'dark': ThemeMode.dark, 'system': ThemeMode.system}['${cfg.v('style', 'theme', 'light')}'] ?? ThemeMode.light,
       home: AnimatedSwitcher(duration: const Duration(milliseconds: 400), child: home),
     );
@@ -579,6 +590,8 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
     final sel = parts.join(',');
     var css = sel.isEmpty ? '' : '$sel{display:none!important}';
     if (app['disable_select'] == true) css += '*{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}input,textarea{-webkit-user-select:text;user-select:text}';
+    // Room at the end of every page so a floating bar never covers the last content.
+    if (_floatingBar) css += 'body{padding-bottom:96px!important}';
     css += '${app['custom_css'] ?? ''}';
     if (css.trim().isNotEmpty) {
       await _web.runJavaScript('(function(){var s=document.getElementById("lf-hide")||document.head.appendChild(Object.assign(document.createElement("style"),{id:"lf-hide"}));s.textContent=${jsonEncode(css)}})();');
@@ -845,16 +858,19 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
   }
 
   Widget _drawerItem(NavItem it, {Color? text, bool rounded = false, bool first = false}) {
-    final ic = text ?? hexColor(c.v('drawer', 'icon_color'), c.primary);
+    final light = text == null || text.computeLuminance() < .5;
+    final ic = light ? hexColor(c.v('drawer', 'icon_color'), c.primary) : text;
+    text ??= const Color(0xFF0F172A);
     if (it.children.isNotEmpty) {
       return ExpansionTile(leading: Icon(it.icon, color: ic), title: Text(it.label, style: TextStyle(color: text)), iconColor: text, collapsedIconColor: text,
-          children: [for (final ch in it.children) _drawerItem(ch, text: text, rounded: rounded)]);
+          textColor: text, collapsedTextColor: text, shape: const Border(), collapsedShape: const Border(),
+          children: [for (final ch in it.children) Padding(padding: const EdgeInsets.only(left: 14), child: _drawerItem(ch, text: text, rounded: rounded))]);
     }
     final tile = ListTile(
       leading: Icon(it.icon, color: ic),
-      title: Text(it.label, style: TextStyle(color: text, fontWeight: rounded && first ? FontWeight.w700 : null)),
+      title: Text(it.label, style: TextStyle(color: first && light ? ic : text, fontWeight: first ? FontWeight.w700 : FontWeight.w500)),
       shape: rounded ? RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)) : null,
-      tileColor: rounded && first ? ic.withOpacity(.12) : null,
+      tileColor: first ? (light ? ic.withOpacity(.12) : Colors.white.withOpacity(.12)) : null,
       onTap: () {
         Navigator.pop(context);
         open(it.url);
@@ -867,16 +883,16 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
   Widget? _drawer() {
     if (!c.hasDrawer) return null;
     final style = '${c.v('drawer', 'style', 'classic')}';
-    if (style == 'classic') return _classicDrawer();
     final about = c.m('about');
     final head = hexColor(c.v('drawer', 'header_bg'), c.primary);
     final dark = style == 'dark' || style == 'gradient';
-    final text = dark ? Colors.white : null;
+    final Color text = dark ? Colors.white : const Color(0xFF0F172A);
     final sub = '${c.v('drawer', 'subtitle', '')}';
     final img = '${c.v('drawer', 'header_image', '')}';
+    final top = MediaQuery.of(context).padding.top;
     final header = Container(
       margin: style == 'modern' ? const EdgeInsets.fromLTRB(12, 12, 12, 8) : EdgeInsets.zero,
-      padding: EdgeInsets.fromLTRB(18, style == 'modern' ? 20 : MediaQuery.of(context).padding.top + 22, 18, 20),
+      padding: EdgeInsets.fromLTRB(18, style == 'modern' || style == 'floating' ? 20 : top + 22, 18, 20),
       decoration: BoxDecoration(
         color: style == 'minimal' || style == 'gradient' ? Colors.transparent : (style == 'dark' ? const Color(0xFF1E293B) : head),
         borderRadius: style == 'modern' ? BorderRadius.circular(22) : null,
@@ -887,28 +903,31 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
         if (c.iconUrl.isNotEmpty) ClipRRect(borderRadius: BorderRadius.circular(14), child: Image.network(c.iconUrl, width: 52, height: 52, errorBuilder: (_, __, ___) => const SizedBox())),
         const SizedBox(width: 14),
         Expanded(child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(c.name, style: TextStyle(color: style == 'minimal' ? Colors.black87 : Colors.white, fontSize: 19, fontWeight: FontWeight.w800)),
+          Text(c.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: style == 'minimal' ? const Color(0xFF0F172A) : Colors.white, fontSize: 19, fontWeight: FontWeight.w800)),
           if (sub.isNotEmpty) Text(sub, style: TextStyle(color: style == 'minimal' ? Colors.black54 : Colors.white70)),
         ])),
       ]),
     );
-    final list = ListView(padding: EdgeInsets.only(top: style == 'modern' ? MediaQuery.of(context).padding.top : 0, bottom: 16), children: [
+    final list = ListView(padding: EdgeInsets.only(top: style == 'modern' ? top : 0, bottom: 16), children: [
       header,
       const SizedBox(height: 6),
       for (var i = 0; i < c.items('drawer').length; i++) _drawerItem(c.items('drawer')[i], text: text, rounded: true, first: i == 0),
       if (c.pages.isNotEmpty) Divider(color: dark ? Colors.white24 : null),
       for (final pg in c.pages) _drawerItem(NavItem({'label': pg.label, 'icon': 'news', 'url': pg.url}), text: text, rounded: true),
       if (about['enabled'] == true)
-        Padding(padding: const EdgeInsets.symmetric(horizontal: 10), child: ListTile(shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)), leading: Icon(Icons.info_outline_rounded, color: text), title: Text('About', style: TextStyle(color: text)), onTap: () {
+        Padding(padding: const EdgeInsets.symmetric(horizontal: 10), child: ListTile(shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)), leading: Icon(Icons.info_outline_rounded, color: dark ? text : hexColor(c.v('drawer', 'icon_color'), c.primary)), title: Text('About', style: TextStyle(color: text, fontWeight: FontWeight.w500)), onTap: () {
           Navigator.pop(context);
           Navigator.push(context, MaterialPageRoute(builder: (_) => AboutView(cfg: c)));
         })),
       if (c.v('share', 'enabled', false) == true)
-        Padding(padding: const EdgeInsets.symmetric(horizontal: 10), child: ListTile(shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)), leading: Icon(Icons.share_rounded, color: text), title: Text('Share app', style: TextStyle(color: text)), onTap: () { Navigator.pop(context); _share(); })),
+        Padding(padding: const EdgeInsets.symmetric(horizontal: 10), child: ListTile(shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)), leading: Icon(Icons.share_rounded, color: dark ? text : hexColor(c.v('drawer', 'icon_color'), c.primary)), title: Text('Share app', style: TextStyle(color: text, fontWeight: FontWeight.w500)), onTap: () { Navigator.pop(context); _share(); })),
     ]);
     final drawer = Drawer(
       backgroundColor: style == 'dark' ? const Color(0xFF0F172A) : (style == 'gradient' ? Colors.transparent : Colors.white),
-      shape: style == 'modern' ? const RoundedRectangleBorder(borderRadius: BorderRadius.horizontal(right: Radius.circular(28))) : (style == 'floating' ? RoundedRectangleBorder(borderRadius: BorderRadius.circular(26)) : null),
+      surfaceTintColor: Colors.transparent,
+      shape: style == 'modern' || style == 'minimal' || style == 'dark' || style == 'gradient'
+          ? const RoundedRectangleBorder(borderRadius: BorderRadius.horizontal(right: Radius.circular(24)))
+          : (style == 'floating' ? RoundedRectangleBorder(borderRadius: BorderRadius.circular(26)) : const RoundedRectangleBorder()),
       child: style == 'gradient'
           ? Container(decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [head, Color.lerp(head, Colors.black, .45)!])), child: list)
           : list,
@@ -919,41 +938,7 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
     return drawer;
   }
 
-  Widget _classicDrawer() {
-    final about = c.m('about');
-    return Drawer(
-      child: ListView(padding: EdgeInsets.zero, children: [
-        DrawerHeader(
-          decoration: BoxDecoration(
-            color: hexColor(c.v('drawer', 'header_bg'), c.primary),
-            image: '${c.v('drawer', 'header_image', '')}'.isNotEmpty
-                ? DecorationImage(image: NetworkImage('${c.v('drawer', 'header_image')}'), fit: BoxFit.cover, colorFilter: const ColorFilter.mode(Colors.black38, BlendMode.darken))
-                : null,
-          ),
-          child: Row(children: [
-            if (c.iconUrl.isNotEmpty) ClipRRect(borderRadius: BorderRadius.circular(14), child: Image.network(c.iconUrl, width: 56, height: 56, errorBuilder: (_, __, ___) => const SizedBox())),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(c.name, style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800)),
-                if ('${c.v('drawer', 'subtitle', '')}'.isNotEmpty) Text('${c.v('drawer', 'subtitle')}', style: const TextStyle(color: Colors.white70)),
-              ]),
-            ),
-          ]),
-        ),
-        for (final it in c.items('drawer')) _drawerItem(it),
-        if (c.pages.isNotEmpty) const Divider(),
-        for (final pg in c.pages) ListTile(leading: const Icon(Icons.description_outlined), title: Text(pg.label), onTap: () { Navigator.pop(context); open(pg.url); }),
-        if (about['enabled'] == true)
-          ListTile(leading: const Icon(Icons.info_outline_rounded), title: const Text('About'), onTap: () {
-            Navigator.pop(context);
-            Navigator.push(context, MaterialPageRoute(builder: (_) => AboutView(cfg: c)));
-          }),
-        if (c.v('share', 'enabled', false) == true)
-          ListTile(leading: const Icon(Icons.share_rounded), title: const Text('Share app'), onTap: () { Navigator.pop(context); _share(); }),
-      ]),
-    );
-  }
+  bool get _floatingBar => c.hasBottom && ['floating', 'glass'].contains('${c.v('bottom_nav', 'design', 'material')}');
 
   /// Bottom bar designs: material, floating, bubble, notch (centre button), minimal, glass.
   Widget? _bottomBar(Color active) {
@@ -997,21 +982,26 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
       case 'floating':
       case 'glass':
         final glass = design == 'glass';
+        // The page runs behind the bar, so the shadow and rounded corners are visible.
+        final row = Container(
+          height: 66,
+          decoration: BoxDecoration(
+            color: glass ? bg.withOpacity(.62) : bg,
+            borderRadius: BorderRadius.circular(28),
+            border: Border.all(color: glass ? Colors.white.withOpacity(.7) : Colors.black.withOpacity(.05)),
+          ),
+          child: Row(children: [for (var i = 0; i < items.length; i++) btn(i)]),
+        );
         return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+          child: Container(
+            margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(28),
+              boxShadow: const [BoxShadow(color: Color(0x40000000), blurRadius: 28, offset: Offset(0, 12))],
+            ),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(28),
-              child: Container(
-                height: 66,
-                decoration: BoxDecoration(
-                  color: glass ? bg.withOpacity(.72) : bg,
-                  borderRadius: BorderRadius.circular(28),
-                  border: glass ? Border.all(color: Colors.white.withOpacity(.6)) : null,
-                  boxShadow: const [BoxShadow(color: Color(0x33000000), blurRadius: 24, offset: Offset(0, 10))],
-                ),
-                child: Row(children: [for (var i = 0; i < items.length; i++) btn(i)]),
-              ),
+              child: glass ? BackdropFilter(filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18), child: row) : row,
             ),
           ),
         );
@@ -1030,10 +1020,20 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
           notchMargin: 8,
           height: 64,
           padding: EdgeInsets.zero,
-          child: Row(children: [for (var i = 0; i < items.length; i++) i == mid ? const Expanded(child: SizedBox()) : btn(i)]),
+          // Centre gap for the round button, the other items split evenly on both sides.
+          child: Row(children: [
+            Expanded(child: Row(children: [for (var i = 0; i < mid; i++) btn(i)])),
+            const SizedBox(width: 76),
+            Expanded(child: Row(children: [for (var i = mid + 1; i < items.length; i++) btn(i)])),
+          ]),
         );
       default:
-        return NavigationBar(
+        return NavigationBarTheme(
+          data: NavigationBarThemeData(
+            labelTextStyle: WidgetStateProperty.resolveWith((st) => TextStyle(fontSize: 12, fontWeight: st.contains(WidgetState.selected) ? FontWeight.w700 : FontWeight.w500, color: st.contains(WidgetState.selected) ? active : idle)),
+            iconTheme: WidgetStateProperty.resolveWith((st) => IconThemeData(color: st.contains(WidgetState.selected) ? active : idle)),
+          ),
+          child: NavigationBar(
           selectedIndex: sel,
           labelBehavior: style == 'icons'
               ? NavigationDestinationLabelBehavior.alwaysHide
@@ -1042,7 +1042,7 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
           indicatorColor: active.withOpacity(.15),
           onDestinationSelected: tap,
           destinations: [for (final it in items) NavigationDestination(icon: Icon(it.icon), selectedIcon: Icon(it.icon, color: active), label: it.label)],
-        );
+        ));
     }
   }
 
@@ -1069,6 +1069,7 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
     final bn = c.m('bottom_nav');
     final active = hexColor(bn['active'], c.primary);
     if (eng['maintenance'] == true) {
+      final ink = c.pageBg.computeLuminance() > .5 ? const Color(0xFF0F172A) : Colors.white;
       return Scaffold(
         backgroundColor: c.pageBg,
         appBar: _appBar(),
@@ -1076,11 +1077,11 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
           child: Padding(
             padding: const EdgeInsets.all(32),
             child: Column(mainAxisSize: MainAxisSize.min, children: [
-              Icon(Icons.construction_rounded, size: 64, color: c.primary),
+              Icon(Icons.construction_rounded, size: 64, color: c.primary.computeLuminance() < .05 && c.pageBg.computeLuminance() < .5 ? Colors.white : c.primary),
               const SizedBox(height: 16),
-              Text('${eng['maintenance_title'] ?? ''}', textAlign: TextAlign.center, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
+              Text('${eng['maintenance_title'] ?? ''}', textAlign: TextAlign.center, style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: ink)),
               const SizedBox(height: 8),
-              Text('${eng['maintenance_text'] ?? ''}', textAlign: TextAlign.center),
+              Text('${eng['maintenance_text'] ?? ''}', textAlign: TextAlign.center, style: TextStyle(color: ink.withOpacity(.7))),
             ]),
           ),
         ),
@@ -1095,6 +1096,7 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
         drawer: _drawer(),
         body: SafeArea(
           top: c.m('header')['enabled'] == false,
+          bottom: !_floatingBar,
           child: Column(children: [
             if (_banner != null && c.v('ads', 'banner_position') == 'top') SizedBox(height: _banner!.size.height.toDouble(), width: double.infinity, child: AdWidget(ad: _banner!)),
             Expanded(
