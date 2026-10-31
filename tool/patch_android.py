@@ -35,6 +35,10 @@ signing = """
     buildTypes {"""
 g = g.replace("\n    buildTypes {", signing, 1)
 g = g.replace("signingConfig = signingConfigs.debug", "signingConfig = signingConfigs.release")
+# flutter_local_notifications needs core library desugaring
+if "coreLibraryDesugaringEnabled" not in g:
+    g = re.sub(r"compileOptions\s*\{", "compileOptions {\n        coreLibraryDesugaringEnabled true", g, count=1)
+    g += "\ndependencies {\n    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.0.4'\n}\n"
 gradle.write_text(g)
 
 manifest = Path("android/app/src/main/AndroidManifest.xml")
@@ -46,6 +50,7 @@ perms = [
     "android.permission.RECORD_AUDIO",
     "android.permission.MODIFY_AUDIO_SETTINGS",
     "android.permission.POST_NOTIFICATIONS",
+    "android.permission.RECEIVE_BOOT_COMPLETED",
 ]
 for perm in perms:
     if perm not in m:

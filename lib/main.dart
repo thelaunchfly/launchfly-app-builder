@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
 import 'package:http/http.dart' as http;
 import 'package:onesignal_flutter/onesignal_flutter.dart';
@@ -13,6 +14,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
+import 'package:workmanager/workmanager.dart';
 
 Color hexColor(dynamic hex, Color fallback) {
   if (hex is! String || !RegExp(r'^#[0-9a-fA-F]{6}$').hasMatch(hex)) return fallback;
@@ -90,6 +92,75 @@ void applySystemUi(Cfg cfg) {
   SystemChrome.setSystemUIOverlayStyle(cfg.overlay);
 }
 
+/* ---------- Built-in notifications (LaunchFly inbox, checked in the background) ---------- */
+
+final _notes = FlutterLocalNotificationsPlugin();
+/// A tapped notification's link, opened by the Shell.
+final pendingUrl = ValueNotifier<String?>(null);
+const _inboxTask = 'lf-inbox';
+
+Future<void> _initNotes() async {
+  await _notes.initialize(
+    const InitializationSettings(android: AndroidInitializationSettings('@mipmap/ic_launcher')),
+    onDidReceiveNotificationResponse: (r) {
+      if ((r.payload ?? '').isNotEmpty) pendingUrl.value = r.payload;
+    },
+  );
+}
+
+String _notifyUrl(Map bundled) => '${bundled['remote_config'] ?? ''}'.replaceFirst('/api/app-config/', '/api/app-notify/');
+
+/// Downloads new notifications, shows them and keeps the last 30 for the inbox. Returns how many were new.
+Future<int> checkInbox(Map bundled, {bool show = true}) async {
+  final url = _notifyUrl(bundled);
+  if (!url.contains('/api/app-notify/')) return 0;
+  final prefs = await SharedPreferences.getInstance();
+  final last = prefs.getInt('note_last');
+  try {
+    final res = await http.get(Uri.parse('$url?after=${last ?? 0}')).timeout(const Duration(seconds: 10));
+    if (res.statusCode != 200) return 0;
+    final j = jsonDecode(res.body) as Map;
+    final items = ((j['items'] as List?) ?? []).cast<Map>();
+    final inbox = ((jsonDecode(prefs.getString('note_inbox') ?? '[]') as List).cast<Map>()).toList();
+    final known = inbox.map((e) => e['id']).toSet();
+    var fresh = 0;
+    for (final it in items.reversed) {
+      if (known.contains(it['id'])) continue;
+      inbox.insert(0, it);
+      fresh++;
+      // The very first check only fills the inbox; it doesn't pop up old messages.
+      if (show && last != null) {
+        await _notes.show(
+          (it['id'] as num).toInt(),
+          '${it['title']}',
+          '${it['body']}',
+          const NotificationDetails(android: AndroidNotificationDetails('lf_news', 'News & offers', importance: Importance.high, priority: Priority.high, styleInformation: BigTextStyleInformation(''))),
+          payload: '${it['url'] ?? ''}',
+        );
+      }
+    }
+    await prefs.setString('note_inbox', jsonEncode(inbox.take(30).toList()));
+    await prefs.setInt('note_last', (j['latest'] as num?)?.toInt() ?? last ?? 0);
+    if (fresh > 0) await prefs.setInt('note_unread', (prefs.getInt('note_unread') ?? 0) + (last == null ? 0 : fresh));
+    return fresh;
+  } catch (_) {
+    return 0;
+  }
+}
+
+@pragma('vm:entry-point')
+void backgroundTask() {
+  Workmanager().executeTask((task, _) async {
+    WidgetsFlutterBinding.ensureInitialized();
+    try {
+      final bundled = jsonDecode(await rootBundle.loadString('assets/app_config.json')) as Map;
+      await _initNotes();
+      await checkInbox(bundled);
+    } catch (_) {}
+    return true;
+  });
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final bundled = jsonDecode(await rootBundle.loadString('assets/app_config.json')) as Map<String, dynamic>;
@@ -111,6 +182,19 @@ Future<void> main() async {
     OneSignal.initialize(osId);
     unawaited(OneSignal.Notifications.requestPermission(true));
   }
+  if (cfg.v('notify', 'enabled', true) != false) {
+    await _initNotes();
+    final launch = await _notes.getNotificationAppLaunchDetails();
+    final p = launch?.notificationResponse?.payload ?? '';
+    if ((launch?.didNotificationLaunchApp ?? false) && p.isNotEmpty) pendingUrl.value = p;
+    try {
+      await Workmanager().initialize(backgroundTask);
+      await Workmanager().registerPeriodicTask(_inboxTask, _inboxTask,
+          frequency: const Duration(minutes: 15), constraints: Constraints(networkType: NetworkType.connected), existingWorkPolicy: ExistingWorkPolicy.keep);
+    } catch (_) {}
+    unawaited(Permission.notification.request());
+    unawaited(checkInbox(bundled));
+  }
   runApp(LaunchFlyApp(initial: cfg, bundled: bundled, prefs: prefs));
 }
 
@@ -123,7 +207,7 @@ class LaunchFlyApp extends StatefulWidget {
   State<LaunchFlyApp> createState() => _LaunchFlyAppState();
 }
 
-class _LaunchFlyAppState extends State<LaunchFlyApp> {
+class _LaunchFlyAppState extends State<LaunchFlyApp> with WidgetsBindingObserver {
   late Cfg cfg = widget.initial;
   bool splash = true;
   late bool intro = cfg.v('walkthrough', 'enabled', false) == true && !(widget.prefs.getBool('intro_done') ?? false);
@@ -132,6 +216,7 @@ class _LaunchFlyAppState extends State<LaunchFlyApp> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _refresh();
     final secs = (cfg.v('splash', 'seconds', 2) as num?)?.toInt() ?? 2;
     Timer(Duration(milliseconds: secs.clamp(1, 6) * 1000 - 200), () => mounted ? setState(() => splash = false) : null);
@@ -140,6 +225,21 @@ class _LaunchFlyAppState extends State<LaunchFlyApp> {
         final url = e.notification.additionalData?['url'];
         if (url is String && url.isNotEmpty) shellKey.currentState?.open(url);
       });
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  /// Design changes from the dashboard also apply when the app returns from the background.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _refresh();
+      if (cfg.v('notify', 'enabled', true) != false) checkInbox(widget.bundled).then((n) => n > 0 ? shellKey.currentState?.inboxChanged() : null);
     }
   }
 
@@ -304,7 +404,7 @@ class Shell extends StatefulWidget {
   State<Shell> createState() => _ShellState();
 }
 
-class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
+class _ShellState extends State<Shell> with TickerProviderStateMixin {
   late final WebViewController _web;
   late final String _host;
   int _progress = 0, _tab = 0, _navCount = 0;
@@ -319,11 +419,10 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
   void initState() {
     super.initState();
     _host = Uri.parse(c.url).host;
-    if (c.hasTabs) {
-      _tabs = TabController(length: c.items('tabs').length, vsync: this)..addListener(() {
-          if (!_tabs!.indexIsChanging) open(c.items('tabs')[_tabs!.index].url);
-        });
-    }
+    _makeTabs();
+    pendingUrl.addListener(_openPending);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _openPending());
+    _loadUnread();
     _web = WebViewController()
       ..setBackgroundColor(c.pageBg)
       ..setNavigationDelegate(NavigationDelegate(
@@ -338,6 +437,49 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
     _setup();
     _loadAds();
     WidgetsBinding.instance.addPostFrameCallback((_) => _engage());
+  }
+
+  int _unread = 0;
+
+  Future<void> _loadUnread() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) setState(() => _unread = prefs.getInt('note_unread') ?? 0);
+  }
+
+  void inboxChanged() => _loadUnread();
+
+  void _openPending() {
+    final u = pendingUrl.value;
+    if (u != null && u.isNotEmpty) {
+      pendingUrl.value = null;
+      open(u);
+    }
+  }
+
+  void _makeTabs() {
+    _tabs?.dispose();
+    _tabs = null;
+    if (c.hasTabs) {
+      _tabs = TabController(length: c.items('tabs').length, vsync: this)..addListener(() {
+          if (!_tabs!.indexIsChanging) open(c.items('tabs')[_tabs!.index].url);
+        });
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant Shell old) {
+    super.didUpdateWidget(old);
+    if (old.cfg.hasTabs != c.hasTabs || old.cfg.items('tabs').length != c.items('tabs').length) _makeTabs();
+    if (_tab >= c.items('bottom_nav').length) _tab = 0;
+  }
+
+  Future<void> _openInbox() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('note_unread', 0);
+    setState(() => _unread = 0);
+    if (!mounted) return;
+    final url = await Navigator.push<String>(context, MaterialPageRoute(builder: (_) => InboxView(cfg: c)));
+    if (url != null && url.isNotEmpty) open(url);
   }
 
   /// Launch-time popups from the dashboard: one-off announcement, then the rate-the-app prompt.
@@ -588,28 +730,122 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
           Padding(padding: const EdgeInsets.only(right: 10), child: ClipRRect(borderRadius: BorderRadius.circular(6), child: Image.network(c.iconUrl, width: 26, height: 26, errorBuilder: (_, __, ___) => const SizedBox()))),
         Flexible(child: Text('${h['title'] ?? c.name}', overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w700))),
       ]),
-      actions: [for (final ri in ((h['right_icons'] as List?) ?? []).cast<Map>()) IconButton(icon: Icon(iconOf(ri['icon'])), onPressed: () => _action(ri))],
-      bottom: c.hasTabs
-          ? TabBar(controller: _tabs, isScrollable: true, labelColor: fg, unselectedLabelColor: fg.withOpacity(.7), indicatorColor: fg, tabs: [
-              for (final t in c.items('tabs')) Tab(text: t.label, icon: c.v('tabs', 'style') == 'icon_title' ? Icon(t.icon) : null),
-            ])
-          : null,
+      actions: [
+        if (c.v('notify', 'enabled', true) != false && c.v('notify', 'inbox', true) != false)
+          IconButton(icon: Badge(isLabelVisible: _unread > 0, label: Text('$_unread'), child: const Icon(Icons.notifications_rounded)), onPressed: _openInbox),
+        for (final ri in ((h['right_icons'] as List?) ?? []).cast<Map>()) IconButton(icon: Icon(iconOf(ri['icon'])), onPressed: () => _action(ri)),
+      ],
+      bottom: c.hasTabs && _tabs != null ? _tabBar(bg, fg) : null,
     );
   }
 
-  Widget _drawerItem(NavItem it) {
-    final ic = hexColor(c.v('drawer', 'icon_color'), c.primary);
-    if (it.children.isNotEmpty) {
-      return ExpansionTile(leading: Icon(it.icon, color: ic), title: Text(it.label), children: [for (final ch in it.children) _drawerItem(ch)]);
+  /// Top tab designs: underline, pills, segmented, outline, light.
+  PreferredSizeWidget _tabBar(Color bg, Color fg) {
+    final design = '${c.v('tabs', 'design', 'underline')}';
+    final items = c.items('tabs');
+    final withIcon = c.v('tabs', 'style') == 'icon_title';
+    final tabs = [for (final t in items) Tab(height: withIcon ? 56 : 40, text: t.label, icon: withIcon ? Icon(t.icon, size: 20) : null)];
+    final scroll = items.length > 4;
+    TabBar bar;
+    switch (design) {
+      case 'pills':
+        bar = TabBar(controller: _tabs, isScrollable: scroll, tabAlignment: scroll ? TabAlignment.start : null, dividerColor: Colors.transparent, labelColor: bg, unselectedLabelColor: fg.withOpacity(.8),
+            indicatorSize: TabBarIndicatorSize.tab, indicator: BoxDecoration(color: fg, borderRadius: BorderRadius.circular(30)), padding: const EdgeInsets.fromLTRB(8, 0, 8, 8), splashBorderRadius: BorderRadius.circular(30), tabs: tabs);
+      case 'segmented':
+        bar = TabBar(controller: _tabs, isScrollable: scroll, tabAlignment: scroll ? TabAlignment.start : null, dividerColor: Colors.transparent, labelColor: bg, unselectedLabelColor: fg,
+            indicatorSize: TabBarIndicatorSize.tab, indicator: BoxDecoration(color: fg, borderRadius: BorderRadius.circular(12)), indicatorPadding: const EdgeInsets.all(4), tabs: tabs);
+        return PreferredSize(
+          preferredSize: Size.fromHeight((withIcon ? 56 : 40) + 22),
+          child: Container(margin: const EdgeInsets.fromLTRB(12, 0, 12, 10), decoration: BoxDecoration(color: fg.withOpacity(.16), borderRadius: BorderRadius.circular(14)), child: bar),
+        );
+      case 'outline':
+        bar = TabBar(controller: _tabs, isScrollable: scroll, tabAlignment: scroll ? TabAlignment.start : null, dividerColor: Colors.transparent, labelColor: fg, unselectedLabelColor: fg.withOpacity(.75),
+            indicatorSize: TabBarIndicatorSize.tab, indicator: BoxDecoration(border: Border.all(color: fg, width: 1.5), borderRadius: BorderRadius.circular(30)), padding: const EdgeInsets.fromLTRB(8, 0, 8, 8), tabs: tabs);
+      case 'light':
+        bar = TabBar(controller: _tabs, isScrollable: scroll, tabAlignment: scroll ? TabAlignment.start : null, labelColor: bg, unselectedLabelColor: Colors.black54, indicatorColor: bg, tabs: tabs);
+        return PreferredSize(preferredSize: Size.fromHeight(withIcon ? 56 : 40), child: Material(color: Colors.white, child: bar));
+      default:
+        bar = TabBar(controller: _tabs, isScrollable: scroll, tabAlignment: scroll ? TabAlignment.start : null, labelColor: fg, unselectedLabelColor: fg.withOpacity(.7), indicatorColor: fg, tabs: tabs);
     }
-    return ListTile(leading: Icon(it.icon, color: ic), title: Text(it.label), onTap: () {
-      Navigator.pop(context);
-      open(it.url);
-    });
+    return PreferredSize(preferredSize: Size.fromHeight((withIcon ? 56 : 40) + (design == 'pills' || design == 'outline' ? 8 : 0)), child: bar);
   }
 
+  Widget _drawerItem(NavItem it, {Color? text, bool rounded = false, bool first = false}) {
+    final ic = text ?? hexColor(c.v('drawer', 'icon_color'), c.primary);
+    if (it.children.isNotEmpty) {
+      return ExpansionTile(leading: Icon(it.icon, color: ic), title: Text(it.label, style: TextStyle(color: text)), iconColor: text, collapsedIconColor: text,
+          children: [for (final ch in it.children) _drawerItem(ch, text: text, rounded: rounded)]);
+    }
+    final tile = ListTile(
+      leading: Icon(it.icon, color: ic),
+      title: Text(it.label, style: TextStyle(color: text, fontWeight: rounded && first ? FontWeight.w700 : null)),
+      shape: rounded ? RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)) : null,
+      tileColor: rounded && first ? ic.withOpacity(.12) : null,
+      onTap: () {
+        Navigator.pop(context);
+        open(it.url);
+      },
+    );
+    return rounded ? Padding(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2), child: tile) : tile;
+  }
+
+  /// Side menu designs: classic, modern, floating, dark, minimal, gradient.
   Widget? _drawer() {
     if (!c.hasDrawer) return null;
+    final style = '${c.v('drawer', 'style', 'classic')}';
+    if (style == 'classic') return _classicDrawer();
+    final about = c.m('about');
+    final head = hexColor(c.v('drawer', 'header_bg'), c.primary);
+    final dark = style == 'dark' || style == 'gradient';
+    final text = dark ? Colors.white : null;
+    final sub = '${c.v('drawer', 'subtitle', '')}';
+    final img = '${c.v('drawer', 'header_image', '')}';
+    final header = Container(
+      margin: style == 'modern' ? const EdgeInsets.fromLTRB(12, 12, 12, 8) : EdgeInsets.zero,
+      padding: EdgeInsets.fromLTRB(18, style == 'modern' ? 20 : MediaQuery.of(context).padding.top + 22, 18, 20),
+      decoration: BoxDecoration(
+        color: style == 'minimal' || style == 'gradient' ? Colors.transparent : (style == 'dark' ? const Color(0xFF1E293B) : head),
+        borderRadius: style == 'modern' ? BorderRadius.circular(22) : null,
+        border: style == 'minimal' ? const Border(bottom: BorderSide(color: Color(0xFFE2E8F0))) : null,
+        image: img.isNotEmpty && style != 'minimal' ? DecorationImage(image: NetworkImage(img), fit: BoxFit.cover, colorFilter: const ColorFilter.mode(Colors.black38, BlendMode.darken)) : null,
+      ),
+      child: Row(children: [
+        if (c.iconUrl.isNotEmpty) ClipRRect(borderRadius: BorderRadius.circular(14), child: Image.network(c.iconUrl, width: 52, height: 52, errorBuilder: (_, __, ___) => const SizedBox())),
+        const SizedBox(width: 14),
+        Expanded(child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(c.name, style: TextStyle(color: style == 'minimal' ? Colors.black87 : Colors.white, fontSize: 19, fontWeight: FontWeight.w800)),
+          if (sub.isNotEmpty) Text(sub, style: TextStyle(color: style == 'minimal' ? Colors.black54 : Colors.white70)),
+        ])),
+      ]),
+    );
+    final list = ListView(padding: EdgeInsets.only(top: style == 'modern' ? MediaQuery.of(context).padding.top : 0, bottom: 16), children: [
+      header,
+      const SizedBox(height: 6),
+      for (var i = 0; i < c.items('drawer').length; i++) _drawerItem(c.items('drawer')[i], text: text, rounded: true, first: i == 0),
+      if (c.pages.isNotEmpty) Divider(color: dark ? Colors.white24 : null),
+      for (final pg in c.pages) _drawerItem(NavItem({'label': pg.label, 'icon': 'news', 'url': pg.url}), text: text, rounded: true),
+      if (about['enabled'] == true)
+        Padding(padding: const EdgeInsets.symmetric(horizontal: 10), child: ListTile(shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)), leading: Icon(Icons.info_outline_rounded, color: text), title: Text('About', style: TextStyle(color: text)), onTap: () {
+          Navigator.pop(context);
+          Navigator.push(context, MaterialPageRoute(builder: (_) => AboutView(cfg: c)));
+        })),
+      if (c.v('share', 'enabled', false) == true)
+        Padding(padding: const EdgeInsets.symmetric(horizontal: 10), child: ListTile(shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)), leading: Icon(Icons.share_rounded, color: text), title: Text('Share app', style: TextStyle(color: text)), onTap: () { Navigator.pop(context); _share(); })),
+    ]);
+    final drawer = Drawer(
+      backgroundColor: style == 'dark' ? const Color(0xFF0F172A) : (style == 'gradient' ? Colors.transparent : Colors.white),
+      shape: style == 'modern' ? const RoundedRectangleBorder(borderRadius: BorderRadius.horizontal(right: Radius.circular(28))) : (style == 'floating' ? RoundedRectangleBorder(borderRadius: BorderRadius.circular(26)) : null),
+      child: style == 'gradient'
+          ? Container(decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [head, Color.lerp(head, Colors.black, .45)!])), child: list)
+          : list,
+    );
+    if (style == 'floating') {
+      return SafeArea(child: Padding(padding: const EdgeInsets.all(12), child: ClipRRect(borderRadius: BorderRadius.circular(26), child: drawer)));
+    }
+    return drawer;
+  }
+
+  Widget _classicDrawer() {
     final about = c.m('about');
     return Drawer(
       child: ListView(padding: EdgeInsets.zero, children: [
@@ -645,8 +881,100 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
     );
   }
 
+  /// Bottom bar designs: material, floating, bubble, notch (centre button), minimal, glass.
+  Widget? _bottomBar(Color active) {
+    if (!c.hasBottom) return null;
+    final items = c.items('bottom_nav');
+    final bn = c.m('bottom_nav');
+    final bg = hexColor(bn['bg'], Colors.white);
+    final design = '${bn['design'] ?? 'material'}';
+    final style = '${bn['style'] ?? 'labels'}';
+    final sel = _tab.clamp(0, items.length - 1);
+    final idle = bg.computeLuminance() > .5 ? Colors.black45 : Colors.white60;
+    bool label(bool on) => style == 'icons' ? false : (style == 'selected' ? on : true);
+    void tap(int i) {
+      setState(() => _tab = i);
+      open(items[i].url);
+    }
+
+    Widget btn(int i, {bool bubble = false, bool dot = false}) {
+      final on = i == sel;
+      final color = on ? active : idle;
+      final showLabel = !dot && label(on) && !(bubble && !on);
+      final child = bubble
+          ? AnimatedContainer(
+              duration: const Duration(milliseconds: 250),
+              padding: EdgeInsets.symmetric(horizontal: on ? 14 : 10, vertical: 9),
+              decoration: BoxDecoration(color: on ? active.withOpacity(.14) : Colors.transparent, borderRadius: BorderRadius.circular(30)),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(items[i].icon, color: color, size: 22),
+                if (showLabel) ...[const SizedBox(width: 6), Text(items[i].label, style: TextStyle(color: color, fontWeight: FontWeight.w700, fontSize: 13))],
+              ]),
+            )
+          : Column(mainAxisSize: MainAxisSize.min, children: [
+              Icon(items[i].icon, color: color, size: 24),
+              if (showLabel) Padding(padding: const EdgeInsets.only(top: 3), child: Text(items[i].label, style: TextStyle(color: color, fontSize: 11, fontWeight: on ? FontWeight.w700 : FontWeight.w500))),
+              if (dot) AnimatedContainer(duration: const Duration(milliseconds: 250), margin: const EdgeInsets.only(top: 4), width: on ? 6 : 0, height: 6, decoration: BoxDecoration(color: active, shape: BoxShape.circle)),
+            ]);
+      return Expanded(child: InkResponse(onTap: () => tap(i), radius: 32, child: Padding(padding: const EdgeInsets.symmetric(vertical: 6), child: Center(child: child))));
+    }
+
+    switch (design) {
+      case 'floating':
+      case 'glass':
+        final glass = design == 'glass';
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(28),
+              child: Container(
+                height: 66,
+                decoration: BoxDecoration(
+                  color: glass ? bg.withOpacity(.72) : bg,
+                  borderRadius: BorderRadius.circular(28),
+                  border: glass ? Border.all(color: Colors.white.withOpacity(.6)) : null,
+                  boxShadow: const [BoxShadow(color: Color(0x33000000), blurRadius: 24, offset: Offset(0, 10))],
+                ),
+                child: Row(children: [for (var i = 0; i < items.length; i++) btn(i)]),
+              ),
+            ),
+          ),
+        );
+      case 'bubble':
+        return Container(
+          color: bg,
+          child: SafeArea(child: SizedBox(height: 64, child: Row(children: [for (var i = 0; i < items.length; i++) btn(i, bubble: true)]))),
+        );
+      case 'minimal':
+        return Container(color: bg, child: SafeArea(child: SizedBox(height: 60, child: Row(children: [for (var i = 0; i < items.length; i++) btn(i, dot: true)]))));
+      case 'notch':
+        final mid = items.length ~/ 2;
+        return BottomAppBar(
+          color: bg,
+          shape: const CircularNotchedRectangle(),
+          notchMargin: 8,
+          height: 64,
+          padding: EdgeInsets.zero,
+          child: Row(children: [for (var i = 0; i < items.length; i++) i == mid ? const Expanded(child: SizedBox()) : btn(i)]),
+        );
+      default:
+        return NavigationBar(
+          selectedIndex: sel,
+          labelBehavior: style == 'icons'
+              ? NavigationDestinationLabelBehavior.alwaysHide
+              : (style == 'selected' ? NavigationDestinationLabelBehavior.onlyShowSelected : NavigationDestinationLabelBehavior.alwaysShow),
+          backgroundColor: bg,
+          indicatorColor: active.withOpacity(.15),
+          onDestinationSelected: tap,
+          destinations: [for (final it in items) NavigationDestination(icon: Icon(it.icon), selectedIcon: Icon(it.icon, color: active), label: it.label)],
+        );
+    }
+  }
+
   @override
   void dispose() {
+    pendingUrl.removeListener(_openPending);
     _banner?.dispose();
     _inter?.dispose();
     _tabs?.dispose();
@@ -703,29 +1031,110 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
             if (_banner != null) SizedBox(height: _banner!.size.height.toDouble(), width: double.infinity, child: AdWidget(ad: _banner!)),
           ]),
         ),
-        floatingActionButton: fab['type'] == null || fab['type'] == 'none'
+        floatingActionButton: c.hasBottom && bn['design'] == 'notch'
+            ? FloatingActionButton(
+                shape: const CircleBorder(),
+                backgroundColor: active,
+                foregroundColor: Colors.white,
+                onPressed: () {
+                  final mid = c.items('bottom_nav').length ~/ 2;
+                  setState(() => _tab = mid);
+                  open(c.items('bottom_nav')[mid].url);
+                },
+                child: Icon(c.items('bottom_nav')[c.items('bottom_nav').length ~/ 2].icon))
+            : fab['type'] == null || fab['type'] == 'none'
             ? null
             : (fab['style'] == 'extended'
                 ? FloatingActionButton.extended(backgroundColor: hexColor(fab['color'], Colors.green), foregroundColor: Colors.white, onPressed: _fab,
                     icon: Icon(fab['type'] == 'call' ? Icons.call_rounded : Icons.chat_rounded), label: Text('${fab['label'] ?? ''}'))
                 : FloatingActionButton(backgroundColor: hexColor(fab['color'], Colors.green), foregroundColor: Colors.white, onPressed: _fab,
                     child: Icon(fab['type'] == 'call' ? Icons.call_rounded : fab['type'] == 'share' ? Icons.share_rounded : Icons.chat_rounded))),
-        bottomNavigationBar: c.hasBottom
-            ? NavigationBar(
-                selectedIndex: _tab.clamp(0, c.items('bottom_nav').length - 1),
-                labelBehavior: c.v('bottom_nav', 'style') == 'icons'
-                    ? NavigationDestinationLabelBehavior.alwaysHide
-                    : (c.v('bottom_nav', 'style') == 'selected' ? NavigationDestinationLabelBehavior.onlyShowSelected : NavigationDestinationLabelBehavior.alwaysShow),
-                backgroundColor: hexColor(bn['bg'], Colors.white),
-                indicatorColor: active.withOpacity(.15),
-                onDestinationSelected: (i) {
-                  setState(() => _tab = i);
-                  open(c.items('bottom_nav')[i].url);
-                },
-                destinations: [for (final it in c.items('bottom_nav')) NavigationDestination(icon: Icon(it.icon), selectedIcon: Icon(it.icon, color: active), label: it.label)],
-              )
-            : null,
+        extendBody: c.hasBottom && ['floating', 'glass'].contains('${bn['design'] ?? 'material'}'),
+        floatingActionButtonLocation: c.hasBottom && bn['design'] == 'notch' ? FloatingActionButtonLocation.centerDocked : null,
+        bottomNavigationBar: _bottomBar(active),
       ),
+    );
+  }
+}
+
+/// The notification inbox (bell icon in the header).
+class InboxView extends StatefulWidget {
+  const InboxView({super.key, required this.cfg});
+  final Cfg cfg;
+  @override
+  State<InboxView> createState() => _InboxViewState();
+}
+
+class _InboxViewState extends State<InboxView> {
+  List<Map> items = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() => items = ((jsonDecode(prefs.getString('note_inbox') ?? '[]') as List).cast<Map>()));
+  }
+
+  String _ago(num? at) {
+    if (at == null) return '';
+    final d = DateTime.now().difference(DateTime.fromMillisecondsSinceEpoch(at.toInt() * 1000));
+    if (d.inMinutes < 60) return '${d.inMinutes.clamp(1, 59)} min ago';
+    if (d.inHours < 24) return '${d.inHours} h ago';
+    return '${d.inDays} d ago';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.cfg;
+    final h = c.m('header');
+    return Scaffold(
+      appBar: AppBar(title: const Text('Notifications'), backgroundColor: hexColor(h['bg'], c.primary), foregroundColor: hexColor(h['fg'], Colors.white)),
+      body: items.isEmpty
+          ? Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Icon(Icons.notifications_none_rounded, size: 64, color: c.primary.withOpacity(.5)),
+              const SizedBox(height: 12),
+              const Text('No notifications yet', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+            ]))
+          : RefreshIndicator(
+              onRefresh: () async {
+                await checkInbox(Map<String, dynamic>.from(c.raw), show: false);
+                await _load();
+              },
+              child: ListView.separated(
+                padding: const EdgeInsets.all(16),
+                itemCount: items.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 10),
+                itemBuilder: (_, i) {
+                  final it = items[i];
+                  final img = '${it['image'] ?? ''}';
+                  final url = '${it['url'] ?? ''}';
+                  return Material(
+                    color: Theme.of(context).colorScheme.surfaceContainerHighest.withOpacity(.5),
+                    borderRadius: BorderRadius.circular(16),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(16),
+                      onTap: url.isEmpty ? null : () => Navigator.pop(context, url),
+                      child: Padding(
+                        padding: const EdgeInsets.all(14),
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Row(children: [
+                            Expanded(child: Text('${it['title']}', style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15))),
+                            Text(_ago(it['at'] as num?), style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                          ]),
+                          const SizedBox(height: 4),
+                          Text('${it['body']}'),
+                          if (img.isNotEmpty) Padding(padding: const EdgeInsets.only(top: 10), child: ClipRRect(borderRadius: BorderRadius.circular(12), child: Image.network(img, fit: BoxFit.cover, errorBuilder: (_, __, ___) => const SizedBox()))),
+                        ]),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
     );
   }
 }

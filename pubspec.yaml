@@ -19,6 +19,8 @@ dependencies:
   onesignal_flutter: ^5.2.6
   share_plus: ^10.1.2
   permission_handler: ^11.3.1
+  flutter_local_notifications: ^17.2.4
+  workmanager: ^0.5.2
 
 dev_dependencies:
   flutter_test:
