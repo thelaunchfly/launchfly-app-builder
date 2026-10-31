@@ -61,6 +61,33 @@ class Cfg {
   bool get hasBottom => (nav == 'bottom' || nav == 'drawer_bottom') && items('bottom_nav').length >= 2;
   bool get hasTabs => nav == 'tabs' && items('tabs').length >= 2;
   List<NavItem> get pages => ((d['pages'] as List?) ?? []).map((e) => NavItem(e as Map)).toList();
+  Color get pageBg => hexColor(v('style', 'page_bg'), Colors.white);
+
+  SystemUiOverlayStyle get overlay {
+    final st = m('style');
+    final darkIcons = st['status_icons'] == 'dark';
+    final nav = hexColor(st['navbar_bg'], Colors.white);
+    return SystemUiOverlayStyle(
+      statusBarColor: hexColor(st['status_bg'], primary),
+      statusBarIconBrightness: darkIcons ? Brightness.dark : Brightness.light,
+      statusBarBrightness: darkIcons ? Brightness.light : Brightness.dark,
+      systemNavigationBarColor: nav,
+      systemNavigationBarIconBrightness: nav.computeLuminance() > .5 ? Brightness.dark : Brightness.light,
+    );
+  }
+}
+
+/// Orientation, full screen and status bar colours from the dashboard.
+void applySystemUi(Cfg cfg) {
+  final app = cfg.m('app');
+  final o = '${app['orientation'] ?? 'auto'}';
+  SystemChrome.setPreferredOrientations(o == 'portrait'
+      ? [DeviceOrientation.portraitUp, DeviceOrientation.portraitDown]
+      : o == 'landscape'
+          ? [DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]
+          : []);
+  SystemChrome.setEnabledSystemUIMode(app['fullscreen'] == true ? SystemUiMode.immersiveSticky : SystemUiMode.manual, overlays: SystemUiOverlay.values);
+  SystemChrome.setSystemUIOverlayStyle(cfg.overlay);
 }
 
 Future<void> main() async {
@@ -75,6 +102,7 @@ Future<void> main() async {
     } catch (_) {}
   }
   final cfg = Cfg(merged);
+  applySystemUi(cfg);
   if (cfg.v('ads', 'enabled', false) == true) {
     unawaited(MobileAds.instance.initialize());
   }
@@ -105,7 +133,8 @@ class _LaunchFlyAppState extends State<LaunchFlyApp> {
   void initState() {
     super.initState();
     _refresh();
-    Timer(const Duration(milliseconds: 1600), () => mounted ? setState(() => splash = false) : null);
+    final secs = (cfg.v('splash', 'seconds', 2) as num?)?.toInt() ?? 2;
+    Timer(Duration(milliseconds: secs.clamp(1, 6) * 1000 - 200), () => mounted ? setState(() => splash = false) : null);
     if (cfg.v('push', 'enabled', false) == true && '${cfg.v('push', 'onesignal_app_id', '')}'.isNotEmpty) {
       OneSignal.Notifications.addClickListener((e) {
         final url = e.notification.additionalData?['url'];
@@ -122,7 +151,10 @@ class _LaunchFlyAppState extends State<LaunchFlyApp> {
       if (res.statusCode != 200) return;
       await widget.prefs.setString('remote_config', res.body);
       final merged = Map<String, dynamic>.from(widget.bundled)..addAll(jsonDecode(res.body) as Map<String, dynamic>);
-      if (mounted) setState(() => cfg = Cfg(merged));
+      if (mounted) {
+        setState(() => cfg = Cfg(merged));
+        applySystemUi(cfg);
+      }
     } catch (_) {}
   }
 
@@ -143,6 +175,8 @@ class _LaunchFlyAppState extends State<LaunchFlyApp> {
       title: cfg.name,
       debugShowCheckedModeBanner: false,
       theme: ThemeData(colorSchemeSeed: cfg.primary, useMaterial3: true),
+      darkTheme: ThemeData(colorSchemeSeed: cfg.primary, useMaterial3: true, brightness: Brightness.dark),
+      themeMode: {'dark': ThemeMode.dark, 'system': ThemeMode.system}['${cfg.v('style', 'theme', 'light')}'] ?? ThemeMode.light,
       home: AnimatedSwitcher(duration: const Duration(milliseconds: 400), child: home),
     );
   }
@@ -289,11 +323,11 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
         });
     }
     _web = WebViewController()
-      ..setBackgroundColor(Colors.white)
+      ..setBackgroundColor(c.pageBg)
       ..setNavigationDelegate(NavigationDelegate(
         onProgress: (p) => setState(() => _progress = p),
         onPageStarted: (_) => setState(() => _offline = false),
-        onPageFinished: (_) => _injectHide(),
+        onPageFinished: (_) => _inject(),
         onWebResourceError: (err) {
           if (err.isForMainFrame ?? true) setState(() => _offline = true);
         },
@@ -301,6 +335,61 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
       ));
     _setup();
     _loadAds();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _engage());
+  }
+
+  /// Launch-time popups from the dashboard: one-off announcement, then the rate-the-app prompt.
+  Future<void> _engage() async {
+    final e = c.m('engage');
+    if (e['maintenance'] == true) return;
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    final id = '${e['announce_id'] ?? '1'}';
+    if (e['announce'] == true && '${e['announce_title'] ?? ''}${e['announce_text'] ?? ''}'.isNotEmpty && prefs.getString('announce_seen') != id) {
+      await prefs.setString('announce_seen', id);
+      final img = '${e['announce_image'] ?? ''}';
+      final link = '${e['announce_url'] ?? ''}';
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          icon: img.isNotEmpty ? ClipRRect(borderRadius: BorderRadius.circular(12), child: Image.network(img, height: 140, fit: BoxFit.cover, errorBuilder: (_, __, ___) => const SizedBox())) : null,
+          title: Text('${e['announce_title'] ?? ''}'),
+          content: Text('${e['announce_text'] ?? ''}'),
+          actions: [
+            if (link.isNotEmpty) TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
+            FilledButton(onPressed: () { Navigator.pop(ctx); if (link.isNotEmpty) open(link); }, child: Text('${e['announce_button'] ?? 'OK'}')),
+          ],
+        ),
+      );
+      return;
+    }
+    if (e['rate'] != true || (prefs.getBool('rate_done') ?? false)) return;
+    final opens = (prefs.getInt('opens') ?? 0) + 1;
+    await prefs.setInt('opens', opens);
+    if (opens < ((e['rate_after'] as num?)?.toInt() ?? 5) || !mounted) return;
+    final pkg = '${c.raw['package_id'] ?? ''}';
+    final choice = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.star_rounded, size: 40, color: Colors.amber),
+        title: Text('${e['rate_title'] ?? 'Enjoying the app?'}'),
+        content: Text('${e['rate_text'] ?? ''}'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, 'never'), child: const Text('No thanks')),
+          TextButton(onPressed: () => Navigator.pop(ctx, 'later'), child: const Text('Later')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, 'rate'), child: const Text('Rate now')),
+        ],
+      ),
+    );
+    if (choice == 'later' || choice == null) {
+      await prefs.setInt('opens', 0);
+    } else {
+      await prefs.setBool('rate_done', true);
+      if (choice == 'rate' && pkg.isNotEmpty) {
+        final ok = await launchUrl(Uri.parse('market://details?id=$pkg'), mode: LaunchMode.externalApplication).catchError((_) => false);
+        if (!ok) await launchUrl(Uri.parse('https://play.google.com/store/apps/details?id=$pkg'), mode: LaunchMode.externalApplication);
+      }
+    }
   }
 
   Future<void> _setup() async {
@@ -311,9 +400,11 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
     await _web.setUserAgent(custom.isNotEmpty ? custom : '${ua ?? ''} LaunchFlyApp'.trim());
     await _web.enableZoom(app['zoom'] == true);
     if (app['clear_cookies'] == true) await WebViewCookieManager().clearCookies();
+    if (app['clear_cache'] == true) await _web.clearCache();
     final platform = _web.platform;
     if (platform is AndroidWebViewController) {
       await platform.setMediaPlaybackRequiresUserGesture(false);
+      await platform.setTextZoom(((app['text_zoom'] as num?)?.toInt() ?? 100).clamp(70, 150));
       await platform.setOnShowFileSelector((params) async {
         final images = params.acceptTypes.any((t) => t.startsWith('image/'));
         final res = await FilePicker.platform.pickFiles(type: images ? FileType.image : FileType.any, allowMultiple: params.mode == FileSelectorMode.openMultiple);
@@ -329,13 +420,29 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
     await _web.loadRequest(Uri.parse(start));
   }
 
-  /// Hide the website's own header/footer inside the app (CSS selectors from the dashboard).
-  Future<void> _injectHide() async {
+  /// App-only CSS/JS: hidden website parts, no text selection, and the owner's custom code.
+  Future<void> _inject() async {
     final h = c.m('hide_web');
+    final app = c.m('app');
     final sel = [h['header'], h['footer']].where((s) => s is String && s.trim().isNotEmpty).join(',');
-    if (sel.isEmpty) return;
-    final css = jsonEncode('$sel{display:none!important}');
-    await _web.runJavaScript('(function(){var s=document.getElementById("lf-hide")||document.head.appendChild(Object.assign(document.createElement("style"),{id:"lf-hide"}));s.textContent=$css})();');
+    var css = sel.isEmpty ? '' : '$sel{display:none!important}';
+    if (app['disable_select'] == true) css += '*{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}input,textarea{-webkit-user-select:text;user-select:text}';
+    css += '${app['custom_css'] ?? ''}';
+    if (css.trim().isNotEmpty) {
+      await _web.runJavaScript('(function(){var s=document.getElementById("lf-hide")||document.head.appendChild(Object.assign(document.createElement("style"),{id:"lf-hide"}));s.textContent=${jsonEncode(css)}})();');
+    }
+    final js = '${app['custom_js'] ?? ''}'.trim();
+    if (js.isNotEmpty) {
+      try {
+        await _web.runJavaScript('try{$js}catch(e){console.error(e)}');
+      } catch (_) {}
+    }
+  }
+
+  bool _isInternal(String host) {
+    if (host == _host || host.endsWith('.$_host')) return true;
+    final extra = '${c.v('app', 'internal_domains', '')}'.split(',').map((d) => d.trim()).where((d) => d.isNotEmpty);
+    return extra.any((d) => host == d || host.endsWith('.$d'));
   }
 
   void _loadAds() {
@@ -374,7 +481,7 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
     final uri = Uri.tryParse(req.url);
     if (uri == null) return NavigationDecision.prevent;
     final isWeb = uri.scheme == 'http' || uri.scheme == 'https';
-    final same = uri.host == _host || uri.host.endsWith('.$_host');
+    final same = _isInternal(uri.host);
     const inApp = ['checkout.stripe.com', 'www.paypal.com', 'www.sandbox.paypal.com'];
     final external = c.m('app')['open_external'] != false;
     if (!isWeb || (external && !same && !inApp.contains(uri.host))) {
@@ -467,6 +574,7 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
       leading = IconButton(icon: const Icon(Icons.home_rounded), onPressed: () => open(c.url));
     }
     return AppBar(
+      systemOverlayStyle: c.overlay,
       foregroundColor: fg,
       backgroundColor: bg,
       flexibleSpace: Container(decoration: BoxDecoration(gradient: LinearGradient(colors: [bg, bg2]))),
@@ -488,10 +596,11 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
   }
 
   Widget _drawerItem(NavItem it) {
+    final ic = hexColor(c.v('drawer', 'icon_color'), c.primary);
     if (it.children.isNotEmpty) {
-      return ExpansionTile(leading: Icon(it.icon, color: c.primary), title: Text(it.label), children: [for (final ch in it.children) _drawerItem(ch)]);
+      return ExpansionTile(leading: Icon(it.icon, color: ic), title: Text(it.label), children: [for (final ch in it.children) _drawerItem(ch)]);
     }
-    return ListTile(leading: Icon(it.icon, color: c.primary), title: Text(it.label), onTap: () {
+    return ListTile(leading: Icon(it.icon, color: ic), title: Text(it.label), onTap: () {
       Navigator.pop(context);
       open(it.url);
     });
@@ -503,11 +612,21 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
     return Drawer(
       child: ListView(padding: EdgeInsets.zero, children: [
         DrawerHeader(
-          decoration: BoxDecoration(color: hexColor(c.v('drawer', 'header_bg'), c.primary)),
+          decoration: BoxDecoration(
+            color: hexColor(c.v('drawer', 'header_bg'), c.primary),
+            image: '${c.v('drawer', 'header_image', '')}'.isNotEmpty
+                ? DecorationImage(image: NetworkImage('${c.v('drawer', 'header_image')}'), fit: BoxFit.cover, colorFilter: const ColorFilter.mode(Colors.black38, BlendMode.darken))
+                : null,
+          ),
           child: Row(children: [
             if (c.iconUrl.isNotEmpty) ClipRRect(borderRadius: BorderRadius.circular(14), child: Image.network(c.iconUrl, width: 56, height: 56, errorBuilder: (_, __, ___) => const SizedBox())),
             const SizedBox(width: 14),
-            Expanded(child: Text(c.name, style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800))),
+            Expanded(
+              child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(c.name, style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800)),
+                if ('${c.v('drawer', 'subtitle', '')}'.isNotEmpty) Text('${c.v('drawer', 'subtitle')}', style: const TextStyle(color: Colors.white70)),
+              ]),
+            ),
           ]),
         ),
         for (final it in c.items('drawer')) _drawerItem(it),
@@ -539,11 +658,32 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
     final lc = hexColor(loader['color'], c.primary);
     final fab = c.m('fab');
     final off = c.m('offline');
+    final eng = c.m('engage');
+    final bn = c.m('bottom_nav');
+    final active = hexColor(bn['active'], c.primary);
+    if (eng['maintenance'] == true) {
+      return Scaffold(
+        backgroundColor: c.pageBg,
+        appBar: _appBar(),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(32),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Icon(Icons.construction_rounded, size: 64, color: c.primary),
+              const SizedBox(height: 16),
+              Text('${eng['maintenance_title'] ?? ''}', textAlign: TextAlign.center, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
+              const SizedBox(height: 8),
+              Text('${eng['maintenance_text'] ?? ''}', textAlign: TextAlign.center),
+            ]),
+          ),
+        ),
+      );
+    }
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: _onBack,
       child: Scaffold(
-        backgroundColor: Colors.white,
+        backgroundColor: c.pageBg,
         appBar: _appBar(),
         drawer: _drawer(),
         body: SafeArea(
@@ -574,12 +714,13 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
                 labelBehavior: c.v('bottom_nav', 'style') == 'icons'
                     ? NavigationDestinationLabelBehavior.alwaysHide
                     : (c.v('bottom_nav', 'style') == 'selected' ? NavigationDestinationLabelBehavior.onlyShowSelected : NavigationDestinationLabelBehavior.alwaysShow),
-                indicatorColor: c.primary.withOpacity(.15),
+                backgroundColor: hexColor(bn['bg'], Colors.white),
+                indicatorColor: active.withOpacity(.15),
                 onDestinationSelected: (i) {
                   setState(() => _tab = i);
                   open(c.items('bottom_nav')[i].url);
                 },
-                destinations: [for (final it in c.items('bottom_nav')) NavigationDestination(icon: Icon(it.icon), selectedIcon: Icon(it.icon, color: c.primary), label: it.label)],
+                destinations: [for (final it in c.items('bottom_nav')) NavigationDestination(icon: Icon(it.icon), selectedIcon: Icon(it.icon, color: active), label: it.label)],
               )
             : null,
       ),
