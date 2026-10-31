@@ -411,6 +411,11 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
   bool _offline = false;
   BannerAd? _banner;
   InterstitialAd? _inter;
+  AppOpenAd? _appOpen;
+  RewardedAd? _rewarded;
+  DateTime _lastInter = DateTime.fromMillisecondsSinceEpoch(0);
+  bool _interOnStartDone = false;
+  AppLifecycleListener? _life;
   TabController? _tabs;
 
   Cfg get c => widget.cfg;
@@ -568,7 +573,10 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
   Future<void> _inject() async {
     final h = c.m('hide_web');
     final app = c.m('app');
-    final sel = [h['header'], h['footer']].where((s) => s is String && s.trim().isNotEmpty).join(',');
+    final parts = [h['header'], h['footer']].where((s) => s is String && s.trim().isNotEmpty).toList();
+    if (h['hide_header'] == true) parts.add(h['auto_header'] ?? 'body>header,.site-header,#header,[role="banner"]');
+    if (h['hide_footer'] == true) parts.add(h['auto_footer'] ?? 'body>footer,.site-footer,#footer,[role="contentinfo"]');
+    final sel = parts.join(',');
     var css = sel.isEmpty ? '' : '$sel{display:none!important}';
     if (app['disable_select'] == true) css += '*{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}input,textarea{-webkit-user-select:text;user-select:text}';
     css += '${app['custom_css'] ?? ''}';
@@ -589,41 +597,107 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
     return extra.any((d) => host == d || host.endsWith('.$d'));
   }
 
-  void _loadAds() {
+  Future<void> _loadAds() async {
     final ads = c.m('ads');
     if (ads['enabled'] != true) return;
     final bid = '${ads['banner_id'] ?? ''}';
     if (bid.isNotEmpty) {
-      _banner = BannerAd(adUnitId: bid, size: AdSize.banner, request: const AdRequest(), listener: BannerAdListener(
-        onAdLoaded: (_) => setState(() {}),
-        onAdFailedToLoad: (ad, _) { ad.dispose(); setState(() => _banner = null); },
+      AdSize size;
+      switch ('${ads['banner_size'] ?? 'adaptive'}') {
+        case 'large':
+          size = AdSize.largeBanner;
+        case 'medium':
+          size = AdSize.mediumRectangle;
+        case 'banner':
+          size = AdSize.banner;
+        default:
+          final w = WidgetsBinding.instance.platformDispatcher.views.first;
+          final width = (w.physicalSize.width / w.devicePixelRatio).truncate();
+          size = await AdSize.getCurrentOrientationAnchoredAdaptiveBannerAdSize(width) ?? AdSize.banner;
+      }
+      _banner = BannerAd(adUnitId: bid, size: size, request: const AdRequest(), listener: BannerAdListener(
+        onAdLoaded: (_) => mounted ? setState(() {}) : null,
+        onAdFailedToLoad: (ad, _) { ad.dispose(); if (mounted) setState(() => _banner = null); },
       ))..load();
     }
     _loadInter();
+    _loadAppOpen();
+    _loadRewarded();
+    _life = AppLifecycleListener(onResume: _showAppOpen);
   }
 
   void _loadInter() {
     final iid = '${c.v('ads', 'interstitial_id', '')}';
     if (c.v('ads', 'enabled', false) != true || iid.isEmpty) return;
     InterstitialAd.load(adUnitId: iid, request: const AdRequest(), adLoadCallback: InterstitialAdLoadCallback(
-      onAdLoaded: (ad) => _inter = ad,
+      onAdLoaded: (ad) {
+        _inter = ad;
+        if (c.v('ads', 'inter_on_start', false) == true && !_interOnStartDone) {
+          _interOnStartDone = true;
+          _showInter();
+        }
+      },
       onAdFailedToLoad: (_) => _inter = null,
     ));
+  }
+
+  void _showInter() {
+    final gap = (c.v('ads', 'inter_gap', 60) as num?)?.toInt() ?? 60;
+    if (_inter == null || DateTime.now().difference(_lastInter).inSeconds < gap) return;
+    _lastInter = DateTime.now();
+    _inter!.show();
+    _inter = null;
+    _loadInter();
+  }
+
+  void _loadAppOpen() {
+    final id = '${c.v('ads', 'app_open_id', '')}';
+    if (c.v('ads', 'enabled', false) != true || id.isEmpty) return;
+    AppOpenAd.load(adUnitId: id, request: const AdRequest(), adLoadCallback: AppOpenAdLoadCallback(
+      onAdLoaded: (ad) => _appOpen = ad,
+      onAdFailedToLoad: (_) => _appOpen = null,
+    ));
+  }
+
+  void _showAppOpen() {
+    final ad = _appOpen;
+    if (ad == null) return;
+    _appOpen = null;
+    ad.fullScreenContentCallback = FullScreenContentCallback(onAdDismissedFullScreenContent: (a) { a.dispose(); _loadAppOpen(); }, onAdFailedToShowFullScreenContent: (a, _) { a.dispose(); _loadAppOpen(); });
+    ad.show();
+  }
+
+  void _loadRewarded() {
+    final id = '${c.v('ads', 'rewarded_id', '')}';
+    if (c.v('ads', 'enabled', false) != true || id.isEmpty) return;
+    RewardedAd.load(adUnitId: id, request: const AdRequest(), rewardedAdLoadCallback: RewardedAdLoadCallback(
+      onAdLoaded: (ad) => _rewarded = ad,
+      onAdFailedToLoad: (_) => _rewarded = null,
+    ));
+  }
+
+  /// A website link to "#reward" shows a rewarded ad; the page gets a "launchfly:reward" event afterwards.
+  void _showRewarded() {
+    final ad = _rewarded;
+    if (ad == null) return;
+    _rewarded = null;
+    ad.show(onUserEarnedReward: (_, __) => _web.runJavaScript('window.dispatchEvent(new Event("launchfly:reward"))'));
+    _loadRewarded();
   }
 
   void _countNav() {
     final every = (c.v('ads', 'tap_count', 0) as num?)?.toInt() ?? 0;
     if (every <= 0 || _inter == null) return;
-    if (++_navCount % every == 0) {
-      _inter!.show();
-      _inter = null;
-      _loadInter();
-    }
+    if (++_navCount % every == 0) _showInter();
   }
 
   NavigationDecision _onNavigate(NavigationRequest req) {
     final uri = Uri.tryParse(req.url);
     if (uri == null) return NavigationDecision.prevent;
+    if (uri.fragment == 'reward' && _rewarded != null) {
+      _showRewarded();
+      return NavigationDecision.prevent;
+    }
     final isWeb = uri.scheme == 'http' || uri.scheme == 'https';
     final same = _isInternal(uri.host);
     const inApp = ['checkout.stripe.com', 'www.paypal.com', 'www.sandbox.paypal.com'];
@@ -975,6 +1049,9 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
   @override
   void dispose() {
     pendingUrl.removeListener(_openPending);
+    _life?.dispose();
+    _appOpen?.dispose();
+    _rewarded?.dispose();
     _banner?.dispose();
     _inter?.dispose();
     _tabs?.dispose();
@@ -1019,6 +1096,7 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
         body: SafeArea(
           top: c.m('header')['enabled'] == false,
           child: Column(children: [
+            if (_banner != null && c.v('ads', 'banner_position') == 'top') SizedBox(height: _banner!.size.height.toDouble(), width: double.infinity, child: AdWidget(ad: _banner!)),
             Expanded(
               child: Stack(children: [
                 WebViewWidget(controller: _web),
@@ -1028,7 +1106,7 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
                 if (_offline) _OfflineView(color: c.primary, title: '${off['title'] ?? 'No internet connection'}', text: '${off['text'] ?? ''}', onRetry: () => _web.reload()),
               ]),
             ),
-            if (_banner != null) SizedBox(height: _banner!.size.height.toDouble(), width: double.infinity, child: AdWidget(ad: _banner!)),
+            if (_banner != null && c.v('ads', 'banner_position') != 'top') SizedBox(height: _banner!.size.height.toDouble(), width: double.infinity, child: AdWidget(ad: _banner!)),
           ]),
         ),
         floatingActionButton: c.hasBottom && bn['design'] == 'notch'
@@ -1155,7 +1233,7 @@ class LockView extends StatelessWidget {
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             Container(
               width: 84, height: 84,
-              decoration: BoxDecoration(color: Colors.white.withValues(alpha: .12), borderRadius: BorderRadius.circular(24)),
+              decoration: BoxDecoration(color: Colors.white.withOpacity(.12), borderRadius: BorderRadius.circular(24)),
               child: const Icon(Icons.lock_clock_rounded, color: Colors.white, size: 42),
             ),
             const SizedBox(height: 24),
