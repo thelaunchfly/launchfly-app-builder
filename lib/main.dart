@@ -161,7 +161,9 @@ class _LaunchFlyAppState extends State<LaunchFlyApp> {
   @override
   Widget build(BuildContext context) {
     Widget home;
-    if (splash) {
+    if (cfg.raw['locked'] == true) {
+      home = LockView(cfg: cfg);
+    } else if (splash) {
       home = SplashView(cfg: cfg);
     } else if (intro) {
       home = Walkthrough(cfg: cfg, onDone: () {
@@ -723,6 +725,43 @@ class _ShellState extends State<Shell> with SingleTickerProviderStateMixin {
                 destinations: [for (final it in c.items('bottom_nav')) NavigationDestination(icon: Icon(it.icon), selectedIcon: Icon(it.icon, color: active), label: it.label)],
               )
             : null,
+      ),
+    );
+  }
+}
+
+/// Shown when the owner's plan is not active (or the app was removed): the website is not loaded.
+class LockView extends StatelessWidget {
+  const LockView({super.key, required this.cfg});
+  final Cfg cfg;
+  @override
+  Widget build(BuildContext context) {
+    final pay = '${cfg.raw['pay_url'] ?? ''}';
+    return Scaffold(
+      body: Container(
+        decoration: const BoxDecoration(gradient: LinearGradient(colors: [Color(0xFF0B1739), Color(0xFF1D4ED8)], begin: Alignment.topLeft, end: Alignment.bottomRight)),
+        padding: const EdgeInsets.all(32),
+        alignment: Alignment.center,
+        child: SafeArea(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Container(
+              width: 84, height: 84,
+              decoration: BoxDecoration(color: Colors.white.withValues(alpha: .12), borderRadius: BorderRadius.circular(24)),
+              child: const Icon(Icons.lock_clock_rounded, color: Colors.white, size: 42),
+            ),
+            const SizedBox(height: 24),
+            Text('${cfg.raw['lock_title'] ?? 'Subscription required'}', textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w800)),
+            const SizedBox(height: 10),
+            Text('${cfg.raw['lock_text'] ?? 'This app is paused. Please renew the subscription.'}', textAlign: TextAlign.center, style: const TextStyle(color: Colors.white70, fontSize: 15, height: 1.5)),
+            const SizedBox(height: 28),
+            if (pay.isNotEmpty)
+              FilledButton(
+                style: FilledButton.styleFrom(backgroundColor: const Color(0xFFFF6B35), minimumSize: const Size(220, 52)),
+                onPressed: () => launchUrl(Uri.parse(pay), mode: LaunchMode.externalApplication),
+                child: const Text('Renew subscription', style: TextStyle(fontWeight: FontWeight.w700)),
+              ),
+          ]),
+        ),
       ),
     );
   }

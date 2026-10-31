@@ -84,10 +84,14 @@ jobs:
       - name: Build
         run: |
           flutter build apk --release --build-name "$VNAME" --build-number "$VCODE"
-          flutter build appbundle --release --build-name "$VNAME" --build-number "$VCODE"
           mkdir out
           cp build/app/outputs/flutter-apk/app-release.apk "out/app-$PKG-$VNAME.apk"
-          cp build/app/outputs/bundle/release/app-release.aab "out/app-$PKG-$VNAME.aab"
+          # The Play Store bundle is only built for paid plans
+          if [ "$(jq -r '.aab // true' build.json)" = "true" ]; then
+            flutter build appbundle --release --build-name "$VNAME" --build-number "$VCODE"
+            cp build/app/outputs/bundle/release/app-release.aab "out/app-$PKG-$VNAME.aab"
+            echo "AAB=1" >> $GITHUB_ENV
+          fi
 
       - name: Publish release
         env:
@@ -101,7 +105,8 @@ jobs:
             KS=$(jq -n --arg b "$(base64 -w0 android/app/upload.jks)" --arg p "$(grep storePassword android/key.properties | cut -d= -f2)" \
               '{b64:$b,store_pass:$p,key_pass:$p,alias:"upload"}')
           fi
-          jq -n --arg apk "$BASE/app-$PKG-$VNAME.apk" --arg aab "$BASE/app-$PKG-$VNAME.aab" \
+          AABURL=""; if [ "$AAB" = "1" ]; then AABURL="$BASE/app-$PKG-$VNAME.aab"; fi
+          jq -n --arg apk "$BASE/app-$PKG-$VNAME.apk" --arg aab "$AABURL" \
             --arg run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --argjson ks "${KS:-null}" \
             '{status:"success",apk_url:$apk,aab_url:$aab,run_url:$run,keystore:$ks}' > result.json
           curl -fsS -X POST "$API/callback" -H "X-Build-Secret: $SECRET" -H "Content-Type: application/json" --data @result.json
