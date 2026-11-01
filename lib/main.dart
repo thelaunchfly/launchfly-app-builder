@@ -877,6 +877,7 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
       statusBg: hexColor(c.v('style', 'status_bg'), bg),
       statusCustom: c.v('style', 'status_mode', 'header') == 'custom',
       searchHint: '${h['search_hint'] ?? 'Search'}',
+      image: '${h['image'] ?? ''}',
       onSearch: (q) {
         final tpl = '${h['search_url'] ?? ''}';
         open(tpl.contains('{q}') ? tpl.replaceAll('{q}', Uri.encodeQueryComponent(q)) : '${c.url}${c.url.contains('?') ? '&' : '?'}s=${Uri.encodeQueryComponent(q)}');
