@@ -5,6 +5,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:lucide_icons/lucide_icons.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
 import 'package:http/http.dart' as http;
 import 'package:onesignal_flutter/onesignal_flutter.dart';
@@ -23,7 +24,7 @@ Color hexColor(dynamic hex, Color fallback) {
   return Color(int.parse('FF${hex.substring(1)}', radix: 16));
 }
 
-const _icons = <String, IconData>{
+const _filled = <String, IconData>{
   'home': Icons.home_rounded, 'store': Icons.storefront_rounded, 'cart': Icons.shopping_cart_rounded, 'tag': Icons.local_offer_rounded,
   'info': Icons.info_rounded, 'phone': Icons.call_rounded, 'mail': Icons.mail_rounded, 'person': Icons.person_rounded,
   'search': Icons.search_rounded, 'heart': Icons.favorite_rounded, 'calendar': Icons.event_rounded, 'location': Icons.place_rounded,
@@ -33,7 +34,20 @@ const _icons = <String, IconData>{
   'bell': Icons.notifications_rounded, 'globe': Icons.public_rounded, 'lock': Icons.lock_rounded, 'gift': Icons.card_giftcard_rounded,
   'reload': Icons.refresh_rounded,
 };
-IconData iconOf(dynamic n) => _icons[n] ?? Icons.circle_outlined;
+/// Modern outline icons (default), matching the dashboard preview.
+const _outline = <String, IconData>{
+  'home': LucideIcons.home, 'store': LucideIcons.store, 'cart': LucideIcons.shoppingCart, 'tag': LucideIcons.tag,
+  'info': LucideIcons.info, 'phone': LucideIcons.phone, 'mail': LucideIcons.mail, 'person': LucideIcons.user,
+  'search': LucideIcons.search, 'heart': LucideIcons.heart, 'calendar': LucideIcons.calendar, 'location': LucideIcons.mapPin,
+  'menu': LucideIcons.menu, 'star': LucideIcons.star, 'chat': LucideIcons.messageCircle, 'gallery': LucideIcons.image,
+  'news': LucideIcons.newspaper, 'settings': LucideIcons.settings, 'share': LucideIcons.share2, 'video': LucideIcons.playCircle,
+  'music': LucideIcons.music, 'school': LucideIcons.graduationCap, 'work': LucideIcons.briefcase, 'help': LucideIcons.helpCircle,
+  'bell': LucideIcons.bell, 'globe': LucideIcons.globe, 'lock': LucideIcons.lock, 'gift': LucideIcons.gift,
+  'reload': LucideIcons.refreshCw,
+};
+/// Set from the design ("Theme & display" → icon style).
+bool outlineIcons = true;
+IconData iconOf(dynamic n) => (outlineIcons ? _outline : _filled)[n] ?? (outlineIcons ? LucideIcons.circle : Icons.circle_outlined);
 
 class NavItem {
   NavItem(Map j)
@@ -175,6 +189,7 @@ Future<void> main() async {
     } catch (_) {}
   }
   final cfg = Cfg(merged);
+  outlineIcons = cfg.v('style', 'icons', 'outline') != 'filled';
   applySystemUi(cfg);
   if (cfg.v('ads', 'enabled', false) == true) {
     unawaited(MobileAds.instance.initialize());
@@ -264,6 +279,7 @@ class _LaunchFlyAppState extends State<LaunchFlyApp> with WidgetsBindingObserver
       await widget.prefs.setString('remote_config', res.body);
       final merged = Map<String, dynamic>.from(widget.bundled)..addAll(jsonDecode(res.body) as Map<String, dynamic>);
       if (mounted) {
+        outlineIcons = Cfg(merged).v('style', 'icons', 'outline') != 'filled';
         setState(() => cfg = Cfg(merged));
         applySystemUi(cfg);
       }
@@ -276,7 +292,20 @@ class _LaunchFlyAppState extends State<LaunchFlyApp> with WidgetsBindingObserver
     if (cfg.raw['locked'] == true) {
       home = LockView(cfg: cfg);
     } else if (splash) {
-      home = SplashView(cfg: cfg);
+      final sp = cfg.m('splash');
+      final c1 = hexColor(sp['bg'], Colors.white);
+      home = Scaffold(body: LFSplash(
+        design: '${sp['design'] ?? 'classic'}',
+        c1: c1,
+        c2: '${sp['bg2'] ?? ''}'.isNotEmpty ? hexColor(sp['bg2'], c1) : c1,
+        titleColor: hexColor(sp['title_color'], const Color(0xFF0F172A)),
+        title: '${sp['title'] ?? cfg.name}',
+        tagline: '${sp['tagline'] ?? ''}',
+        logoUrl: cfg.iconUrl,
+        showLogo: sp['show_logo'] != false,
+        showTitle: sp['show_title'] != false,
+        image: '${sp['image'] ?? ''}',
+      ));
     } else if (intro) {
       home = Walkthrough(cfg: cfg, onDone: () {
         widget.prefs.setBool('intro_done', true);
@@ -597,6 +626,11 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
     if (app['disable_select'] == true) css += '*{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}input,textarea{-webkit-user-select:text;user-select:text}';
     // Room at the end of every page so a floating bar never covers the last content.
     if (_floatingBar) css += 'body{padding-bottom:96px!important}';
+    // "Make my website dark too" (when the app theme is dark or follows a dark phone).
+    final darkNow = c.v('style', 'theme') == 'dark' || (c.v('style', 'theme') == 'system' && WidgetsBinding.instance.platformDispatcher.platformBrightness == Brightness.dark);
+    if (c.v('style', 'web_dark', false) == true && darkNow) {
+      css += 'html{filter:invert(.92) hue-rotate(180deg)!important;background:#111!important}img,video,picture,iframe,svg,[style*="background-image"]{filter:invert(1) hue-rotate(180deg)!important}';
+    }
     css += '${app['custom_css'] ?? ''}';
     if (css.trim().isNotEmpty) {
       await _web.runJavaScript('(function(){var s=document.getElementById("lf-hide")||document.head.appendChild(Object.assign(document.createElement("style"),{id:"lf-hide"}));s.textContent=${jsonEncode(css)}})();');
@@ -732,6 +766,19 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
   }
 
   Future<void> open(String url) async {
+    if (url.startsWith('app://')) {
+      switch (url.substring(6)) {
+        case 'about':
+          Navigator.push(context, MaterialPageRoute(builder: (_) => AboutView(cfg: c)));
+        case 'share':
+          _share();
+        case 'inbox':
+          _openInbox();
+        default:
+          await _web.loadRequest(Uri.parse(c.url));
+      }
+      return;
+    }
     final uri = Uri.tryParse(url);
     if (uri == null || url.isEmpty) return;
     if (uri.scheme == 'http' || uri.scheme == 'https') {
@@ -812,11 +859,11 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
     final left = '${h['left_icon'] ?? 'auto'}';
     Widget? leading;
     if (left == 'back') {
-      leading = IconButton(icon: const Icon(Icons.arrow_back_rounded), onPressed: () => _web.goBack());
+      leading = IconButton(icon: Icon(outlineIcons ? LucideIcons.arrowLeft : Icons.arrow_back_rounded), onPressed: () => _web.goBack());
     } else if (left == 'home') {
-      leading = IconButton(icon: const Icon(Icons.home_rounded), onPressed: () => open(c.url));
+      leading = IconButton(icon: Icon(outlineIcons ? LucideIcons.home : Icons.home_rounded), onPressed: () => open(c.url));
     } else if (c.hasDrawer && (left == 'auto' || left == 'menu')) {
-      leading = IconButton(icon: const Icon(Icons.menu_rounded), onPressed: () => _sk.currentState?.openDrawer());
+      leading = IconButton(icon: Icon(outlineIcons ? LucideIcons.menu : Icons.menu_rounded), onPressed: () => _sk.currentState?.openDrawer());
     }
     return LFHeader(
       design: '${h['design'] ?? 'classic'}',
@@ -824,6 +871,7 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
       bg2: bg2,
       fg: fg,
       statusBg: hexColor(c.v('style', 'status_bg'), bg),
+      statusCustom: c.v('style', 'status_mode', 'header') == 'custom',
       pageBg: c.pageBg,
       title: '${h['title'] ?? c.name}',
       subtitle: '${h['subtitle'] ?? ''}',
@@ -831,11 +879,11 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
       hidden: _barsHidden && h['hide_on_scroll'] == true,
       leading: leading,
       logo: h['show_logo'] == true && c.iconUrl.isNotEmpty
-          ? ClipRRect(borderRadius: BorderRadius.circular(8), child: Image.network(c.iconUrl, width: 30, height: 30, errorBuilder: (_, __, ___) => const SizedBox()))
+          ? AppLogo(url: c.iconUrl, size: 30, radius: 9)
           : null,
       actions: [
         if (c.v('notify', 'enabled', true) != false && c.v('notify', 'inbox', true) != false)
-          IconButton(icon: Badge(isLabelVisible: _unread > 0, label: Text('$_unread'), child: const Icon(Icons.notifications_rounded)), onPressed: _openInbox),
+          IconButton(icon: Badge(isLabelVisible: _unread > 0, label: Text('$_unread'), child: Icon(outlineIcons ? LucideIcons.bell : Icons.notifications_rounded)), onPressed: _openInbox),
         for (final ri in ((h['right_icons'] as List?) ?? []).cast<Map>()) IconButton(icon: Icon(iconOf(ri['icon'])), onPressed: () => _action(ri)),
       ],
       bottom: c.hasTabs && _tabs != null ? _tabBar(h['design'] == 'minimal' ? c.pageBg : bg, h['design'] == 'minimal' ? bg : fg) : null,
@@ -911,26 +959,16 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
     final Color text = dark ? Colors.white : const Color(0xFF0F172A);
     final sub = '${c.v('drawer', 'subtitle', '')}';
     final img = '${c.v('drawer', 'header_image', '')}';
-    final top = MediaQuery.of(context).padding.top;
-    final header = Container(
-      margin: style == 'modern' ? const EdgeInsets.fromLTRB(12, 12, 12, 8) : EdgeInsets.zero,
-      padding: EdgeInsets.fromLTRB(18, style == 'modern' || style == 'floating' ? 20 : top + 22, 18, 20),
-      decoration: BoxDecoration(
-        color: style == 'minimal' || style == 'gradient' ? Colors.transparent : (style == 'dark' ? const Color(0xFF1E293B) : head),
-        borderRadius: style == 'modern' ? BorderRadius.circular(22) : null,
-        border: style == 'minimal' ? const Border(bottom: BorderSide(color: Color(0xFFE2E8F0))) : null,
-        image: img.isNotEmpty && style != 'minimal' ? DecorationImage(image: NetworkImage(img), fit: BoxFit.cover, colorFilter: const ColorFilter.mode(Colors.black38, BlendMode.darken)) : null,
-      ),
-      child: Row(children: [
-        if (c.iconUrl.isNotEmpty) ClipRRect(borderRadius: BorderRadius.circular(14), child: Image.network(c.iconUrl, width: 52, height: 52, errorBuilder: (_, __, ___) => const SizedBox())),
-        const SizedBox(width: 14),
-        Expanded(child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(c.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: style == 'minimal' ? const Color(0xFF0F172A) : Colors.white, fontSize: 19, fontWeight: FontWeight.w800)),
-          if (sub.isNotEmpty) Text(sub, style: TextStyle(color: style == 'minimal' ? Colors.black54 : Colors.white70)),
-        ])),
-      ]),
+    final header = LFDrawerHeader(
+      design: '${c.v('drawer', 'header_style', 'card')}',
+      color: style == 'dark' ? const Color(0xFF1E293B) : head,
+      title: c.name,
+      subtitle: sub,
+      logoUrl: c.iconUrl,
+      dark: dark,
+      image: img,
     );
-    final list = ListView(padding: EdgeInsets.only(top: style == 'modern' ? top : 0, bottom: 16), children: [
+    final list = ListView(padding: EdgeInsets.only(top: style == 'floating' ? 0 : 0, bottom: 16), children: [
       header,
       const SizedBox(height: 6),
       for (var i = 0; i < c.items('drawer').length; i++) SlideIn(index: i, child: _drawerItem(c.items('drawer')[i], text: text, rounded: true, first: i == 0)),
@@ -1096,13 +1134,20 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
                 child: Icon(c.items('bottom_nav')[c.items('bottom_nav').length ~/ 2].icon))
             : fab['type'] == null || fab['type'] == 'none'
             ? null
-            : (fab['style'] == 'extended'
-                ? FloatingActionButton.extended(backgroundColor: hexColor(fab['color'], Colors.green), foregroundColor: Colors.white, onPressed: _fab,
-                    icon: Icon(fab['type'] == 'call' ? Icons.call_rounded : Icons.chat_rounded), label: Text('${fab['label'] ?? ''}'))
-                : FloatingActionButton(backgroundColor: hexColor(fab['color'], Colors.green), foregroundColor: Colors.white, onPressed: _fab,
-                    child: Icon(fab['type'] == 'call' ? Icons.call_rounded : fab['type'] == 'share' ? Icons.share_rounded : Icons.chat_rounded))),
-        extendBody: c.hasBottom && ['floating', 'glass'].contains('${bn['design'] ?? 'material'}'),
-        floatingActionButtonLocation: c.hasBottom && bn['design'] == 'notch' ? FloatingActionButtonLocation.centerDocked : null,
+            : Padding(
+                padding: EdgeInsets.only(bottom: _floatingBar ? 74 : 0),
+                child: LFFab(
+                  design: '${fab['design'] ?? (fab['style'] == 'extended' ? 'pill' : 'circle')}',
+                  color: hexColor(fab['color'], Colors.green),
+                  icon: fab['type'] == 'call' ? LucideIcons.phone : fab['type'] == 'share' ? LucideIcons.share2 : fab['type'] == 'link' ? LucideIcons.externalLink : LucideIcons.messageCircle,
+                  label: '${fab['label'] ?? 'Chat'}',
+                  onTap: _fab,
+                ),
+              ),
+        extendBody: _floatingBar,
+        floatingActionButtonLocation: c.hasBottom && bn['design'] == 'notch'
+            ? FloatingActionButtonLocation.centerDocked
+            : {'left': FloatingActionButtonLocation.startFloat, 'center': FloatingActionButtonLocation.centerFloat}['${fab['position'] ?? 'right'}'],
         bottomNavigationBar: _bottomBar(active),
       ),
     );
@@ -1235,31 +1280,70 @@ class AboutView extends StatelessWidget {
   Widget build(BuildContext context) {
     final a = cfg.m('about');
     final links = <(IconData, String, String)>[
-      (Icons.chat_rounded, 'WhatsApp', '${a['whatsapp'] ?? ''}'.isNotEmpty ? 'https://wa.me/${'${a['whatsapp']}'.replaceAll(RegExp(r'\D'), '')}' : ''),
-      (Icons.call_rounded, 'Call', '${a['phone'] ?? ''}'.isNotEmpty ? 'tel:${a['phone']}' : ''),
-      (Icons.mail_rounded, 'Email', '${a['email'] ?? ''}'.isNotEmpty ? 'mailto:${a['email']}' : ''),
-      (Icons.public_rounded, 'Website', '${a['website'] ?? ''}'),
-      (Icons.facebook_rounded, 'Facebook', '${a['facebook'] ?? ''}'),
-      (Icons.camera_alt_rounded, 'Instagram', '${a['instagram'] ?? ''}'),
-      (Icons.alternate_email_rounded, 'X / Twitter', '${a['twitter'] ?? ''}'),
-      (Icons.play_circle_rounded, 'YouTube', '${a['youtube'] ?? ''}'),
-      (Icons.music_note_rounded, 'TikTok', '${a['tiktok'] ?? ''}'),
-      (Icons.photo_camera_front_rounded, 'Snapchat', '${a['snapchat'] ?? ''}'),
-      (Icons.forum_rounded, 'Messenger', '${a['messenger'] ?? ''}'),
-      (Icons.video_call_rounded, 'Skype', '${a['skype'] ?? ''}'.isNotEmpty ? 'skype:${a['skype']}?chat' : ''),
+      (LucideIcons.messageCircle, 'WhatsApp', '${a['whatsapp'] ?? ''}'.isNotEmpty ? 'https://wa.me/${'${a['whatsapp']}'.replaceAll(RegExp(r'\D'), '')}' : ''),
+      (LucideIcons.phone, 'Call', '${a['phone'] ?? ''}'.isNotEmpty ? 'tel:${a['phone']}' : ''),
+      (LucideIcons.mail, 'Email', '${a['email'] ?? ''}'.isNotEmpty ? 'mailto:${a['email']}' : ''),
+      (LucideIcons.globe, 'Website', '${a['website'] ?? ''}'),
+      (LucideIcons.facebook, 'Facebook', '${a['facebook'] ?? ''}'),
+      (LucideIcons.instagram, 'Instagram', '${a['instagram'] ?? ''}'),
+      (LucideIcons.twitter, 'X / Twitter', '${a['twitter'] ?? ''}'),
+      (LucideIcons.youtube, 'YouTube', '${a['youtube'] ?? ''}'),
+      (LucideIcons.music2, 'TikTok', '${a['tiktok'] ?? ''}'),
+      (LucideIcons.ghost, 'Snapchat', '${a['snapchat'] ?? ''}'),
+      (LucideIcons.messagesSquare, 'Messenger', '${a['messenger'] ?? ''}'),
+      (LucideIcons.video, 'Skype', '${a['skype'] ?? ''}'.isNotEmpty ? 'skype:${a['skype']}?chat' : ''),
     ].where((l) => l.$3.isNotEmpty).toList();
+    final h = cfg.m('header');
+    final bg = hexColor(h['bg'], cfg.primary);
+    final bg2 = '${h['bg2'] ?? ''}'.isNotEmpty ? hexColor(h['bg2'], bg) : Color.lerp(bg, Colors.black, .3)!;
+    final fg = hexColor(h['fg'], Colors.white);
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final card = dark ? const Color(0xFF1E293B) : Colors.white;
+    final ink = dark ? Colors.white : const Color(0xFF0F172A);
     return Scaffold(
-      appBar: AppBar(title: const Text('About'), backgroundColor: cfg.primary, foregroundColor: Colors.white),
-      body: ListView(padding: const EdgeInsets.all(24), children: [
-        if (cfg.iconUrl.isNotEmpty) Center(child: ClipRRect(borderRadius: BorderRadius.circular(24), child: Image.network(cfg.iconUrl, width: 96, height: 96, errorBuilder: (_, __, ___) => const SizedBox()))),
-        const SizedBox(height: 16),
-        Center(child: Text(cfg.name, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800))),
-        const SizedBox(height: 16),
-        if ('${a['text'] ?? ''}'.isNotEmpty) Text('${a['text']}', textAlign: TextAlign.center, style: TextStyle(color: Colors.grey.shade700, fontSize: 16)),
-        const SizedBox(height: 24),
-        for (final l in links)
-          Card(child: ListTile(leading: Icon(l.$1, color: cfg.primary), title: Text(l.$2), trailing: const Icon(Icons.chevron_right_rounded),
-              onTap: () => launchUrl(Uri.parse(l.$3), mode: LaunchMode.externalApplication))),
+      backgroundColor: dark ? const Color(0xFF0F172A) : const Color(0xFFF1F5F9),
+      body: CustomScrollView(slivers: [
+        SliverToBoxAdapter(
+          child: Container(
+            padding: EdgeInsets.fromLTRB(16, MediaQuery.of(context).padding.top + 8, 16, 34),
+            decoration: BoxDecoration(gradient: LinearGradient(colors: [bg, bg2], begin: Alignment.topLeft, end: Alignment.bottomRight), borderRadius: const BorderRadius.vertical(bottom: Radius.circular(32))),
+            child: Column(children: [
+              Align(alignment: Alignment.centerLeft, child: IconButton(icon: Icon(outlineIcons ? LucideIcons.arrowLeft : Icons.arrow_back_rounded, color: fg), onPressed: () => Navigator.pop(context))),
+              Container(padding: const EdgeInsets.all(4), decoration: BoxDecoration(color: Colors.white.withOpacity(.25), borderRadius: BorderRadius.circular(30)), child: AppLogo(url: cfg.iconUrl, size: 96, radius: 26)),
+              const SizedBox(height: 14),
+              Text(cfg.name, textAlign: TextAlign.center, style: TextStyle(color: fg, fontSize: 26, fontWeight: FontWeight.w800)),
+              if ('${a['text'] ?? ''}'.isNotEmpty)
+                Padding(padding: const EdgeInsets.only(top: 8), child: Text('${a['text']}', textAlign: TextAlign.center, style: TextStyle(color: fg.withOpacity(.85), fontSize: 15, height: 1.45))),
+            ]),
+          ),
+        ),
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(16, 20, 16, 30),
+          sliver: SliverList.separated(
+            itemCount: links.length,
+            separatorBuilder: (_, __) => const SizedBox(height: 10),
+            itemBuilder: (_, i) {
+              final l = links[i];
+              return Material(
+                color: card,
+                borderRadius: BorderRadius.circular(18),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(18),
+                  onTap: () => launchUrl(Uri.parse(l.$3), mode: LaunchMode.externalApplication),
+                  child: Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Row(children: [
+                      Container(width: 42, height: 42, decoration: BoxDecoration(color: bg.withOpacity(.12), borderRadius: BorderRadius.circular(13)), child: Icon(l.$1, color: bg.computeLuminance() < .05 && dark ? Colors.white : bg, size: 21)),
+                      const SizedBox(width: 14),
+                      Expanded(child: Text(l.$2, style: TextStyle(color: ink, fontSize: 15.5, fontWeight: FontWeight.w600))),
+                      Icon(outlineIcons ? LucideIcons.chevronRight : Icons.chevron_right_rounded, color: ink.withOpacity(.4)),
+                    ]),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
       ]),
     );
   }
