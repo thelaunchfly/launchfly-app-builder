@@ -40,6 +40,7 @@ jobs:
           mkdir -p android/app && keytool -genkeypair -keystore android/app/upload.jks -alias upload -keyalg RSA -keysize 2048 -validity 1 -storepass checkcheck -keypass checkcheck -dname "CN=check" >/dev/null 2>&1
           printf "storeFile=upload.jks\nstorePassword=checkcheck\nkeyPassword=checkcheck\nkeyAlias=upload\n" > android/key.properties
           python3 tool/patch_android.py com.thelaunchfly.check "Check"
+          rm -rf test
           flutter pub get
           flutter analyze --no-fatal-infos --no-fatal-warnings
           flutter build apk --release
