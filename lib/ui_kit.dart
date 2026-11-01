@@ -4,6 +4,32 @@ import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_spinkit/flutter_spinkit.dart';
+import 'package:flutter_svg/flutter_svg.dart';
+
+/// Icon library bundled with the app: {"io": {name: svg}, "md": {name: svg}} (Ionicons + Modern).
+Map<String, dynamic> iconLibrary = {};
+/// Built-in icon names (home, cart…) resolved by the app.
+IconData Function(String name) builtinIcon = (_) => Icons.circle_outlined;
+
+/// Any icon from the dashboard: "io:home-outline", "md:ad" or a built-in name like "home".
+class AppIco extends StatelessWidget {
+  const AppIco(this.name, {super.key, this.color, this.size});
+  final String name;
+  final Color? color;
+  final double? size;
+  @override
+  Widget build(BuildContext context) {
+    final c = color ?? IconTheme.of(context).color ?? Colors.black;
+    final s = size ?? IconTheme.of(context).size ?? 24;
+    final i = name.indexOf(':');
+    if (i > 0) {
+      final svg = (iconLibrary[name.substring(0, i)] as Map?)?[name.substring(i + 1)];
+      // Center keeps the icon at its own size even inside a fixed-size box.
+      if (svg is String) return Center(widthFactor: 1, heightFactor: 1, child: SvgPicture.string(svg, width: s, height: s, theme: SvgTheme(currentColor: c)));
+    }
+    return Icon(builtinIcon(name), color: c, size: s);
+  }
+}
 
 const _ease = Curves.easeOutCubic;
 const _dur = Duration(milliseconds: 320);
@@ -11,7 +37,7 @@ const _dur = Duration(milliseconds: 320);
 /// One bottom bar entry.
 class BarItem {
   const BarItem(this.icon, this.label);
-  final IconData icon;
+  final String icon;
   final String label;
 }
 
@@ -60,14 +86,14 @@ class LFBottomBar extends StatelessWidget {
       );
 
   /// Icon that pops slightly when it becomes selected.
-  Widget _icon(IconData ic, Color c, bool on, {double size = 24}) => AnimatedScale(
+  Widget _icon(String ic, Color c, bool on, {double size = 24}) => AnimatedScale(
         scale: on ? 1.12 : 1,
         duration: _dur,
         curve: Curves.easeOutBack,
         child: TweenAnimationBuilder<Color?>(
           tween: ColorTween(end: c),
           duration: _dur,
-          builder: (_, col, __) => Icon(ic, color: col, size: size),
+          builder: (_, col, __) => AppIco(ic, color: col, size: size),
         ),
       );
 
@@ -200,7 +226,7 @@ class LFBottomBar extends StatelessWidget {
                   borderRadius: BorderRadius.circular(16),
                   boxShadow: on ? [BoxShadow(color: active.withOpacity(.45), blurRadius: 16, offset: const Offset(0, 8))] : const [],
                 ),
-                child: Icon(items[i].icon, color: on ? _onActive : idle, size: 24),
+                child: AppIco(items[i].icon, color: on ? _onActive : idle, size: 24),
               ),
               if (labels != 'icons') Transform.translate(offset: Offset(0, on ? -8 : 0), child: _label(items[i].label, on ? active : idle, on)),
             ])), height: 74);
@@ -213,7 +239,7 @@ class LFBottomBar extends StatelessWidget {
               width: on ? 50 : 44,
               height: on ? 50 : 44,
               decoration: BoxDecoration(color: on ? Colors.white : Colors.transparent, shape: BoxShape.circle),
-              child: Icon(items[i].icon, color: on ? const Color(0xFF0F172A) : Colors.white.withOpacity(.75), size: 23),
+              child: AppIco(items[i].icon, color: on ? const Color(0xFF0F172A) : Colors.white.withOpacity(.75), size: 23),
             )), color: const Color(0xFF111418), radius: 36, height: 70);
 
       // ---- Dock: floating bar with a raised bubble that slides to the selected item
@@ -230,7 +256,7 @@ class LFBottomBar extends StatelessWidget {
               height: 52,
               child: DecoratedBox(decoration: BoxDecoration(color: active, shape: BoxShape.circle, boxShadow: [BoxShadow(color: active.withOpacity(.45), blurRadius: 14, offset: const Offset(0, 6))])),
             ),
-            Positioned.fill(child: _row((i, on) => Icon(items[i].icon, color: on ? _onActive : idle, size: 24))),
+            Positioned.fill(child: _row((i, on) => AppIco(items[i].icon, color: on ? _onActive : idle, size: 24))),
           ]);
         }), radius: 34, height: 66);
 
@@ -257,7 +283,7 @@ class LFBottomBar extends StatelessWidget {
                 curve: _ease,
                 padding: EdgeInsets.symmetric(horizontal: on ? 18 : 12, vertical: 4),
                 decoration: BoxDecoration(color: on ? active.withOpacity(.15) : Colors.transparent, borderRadius: BorderRadius.circular(20)),
-                child: Icon(items[i].icon, color: on ? active : idle, size: 24),
+                child: AppIco(items[i].icon, color: on ? active : idle, size: 24),
               ),
               if (_showLabel(on)) Padding(padding: const EdgeInsets.only(top: 4), child: _label(items[i].label, on ? active : idle, on, size: 12)),
             ])));
@@ -319,7 +345,13 @@ class LFHeader extends StatelessWidget {
     this.bottom,
     this.hidden = false,
     this.statusCustom = false,
+    this.onSearch,
+    this.searchHint = 'Search',
   });
+
+  /// Called with the text from the search bar (Search header design).
+  final ValueChanged<String>? onSearch;
+  final String searchHint;
 
   final String design;
   final Color bg, bg2, fg, statusBg, pageBg;
@@ -419,6 +451,89 @@ class LFHeader extends StatelessWidget {
             if (bottom != null) Padding(padding: const EdgeInsets.only(top: 10), child: bottom!),
           ]),
         );
+      case 'search':
+      case 'greeting':
+        // Title row with round buttons, then (search) a rounded search field.
+        final light = pageBg.computeLuminance() > .5;
+        final txt = light ? const Color(0xFF0F172A) : Colors.white;
+        Widget roundBtn(Widget w) => Container(
+              margin: const EdgeInsets.only(left: 8),
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(color: light ? Colors.white : Colors.white.withOpacity(.1), shape: BoxShape.circle, boxShadow: light ? const [BoxShadow(color: Color(0x14000000), blurRadius: 12, offset: Offset(0, 4))] : null),
+              child: IconTheme(data: IconThemeData(color: txt, size: 21), child: Center(child: w)),
+            );
+        body = Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Color.lerp(pageBg, bg, .14)!, pageBg]),
+          ),
+          padding: EdgeInsets.fromLTRB(18, top + 10, 14, 12),
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              if (leading != null && design == 'search') roundBtn(leading!),
+              if (design == 'greeting' && logo != null) Padding(padding: const EdgeInsets.only(right: 12), child: ClipOval(child: SizedBox(width: 46, height: 46, child: FittedBox(fit: BoxFit.cover, child: logo)))),
+              if (design == 'search') const SizedBox(width: 12),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                  if (subtitle.isNotEmpty) Text(subtitle, style: TextStyle(color: txt.withOpacity(.55), fontSize: 13, fontWeight: FontWeight.w500)),
+                  Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: txt, fontSize: design == 'greeting' ? 24 : 20, fontWeight: FontWeight.w800, letterSpacing: -.5)),
+                ]),
+              ),
+              for (final a in actions) roundBtn(a),
+              if (leading != null && design == 'greeting') roundBtn(leading!),
+            ]),
+            if (design == 'search') ...[
+              const SizedBox(height: 12),
+              _SearchField(hint: searchHint, ink: txt, light: light, onSubmit: onSearch),
+            ],
+            if (bottom != null) bottom!,
+          ]),
+        );
+      case 'rings':
+        // Outline ring buttons on both sides, centred title.
+        Widget ring(Widget w) => Container(
+              margin: const EdgeInsets.symmetric(horizontal: 4),
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: fg.withOpacity(.35), width: 1.5)),
+              child: IconTheme(data: IconThemeData(color: fg, size: 20), child: Center(child: w)),
+            );
+        body = Container(
+          decoration: BoxDecoration(gradient: grad, borderRadius: const BorderRadius.vertical(bottom: Radius.circular(26))),
+          padding: EdgeInsets.fromLTRB(10, top + 10, 10, 14),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Row(children: [
+              if (leading != null) ring(leading!) else const SizedBox(width: 52),
+              Expanded(child: Text(title, textAlign: TextAlign.center, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: fg, fontSize: 21, fontWeight: FontWeight.w700, letterSpacing: -.4))),
+              if (actions.isNotEmpty) ring(actions.first) else const SizedBox(width: 52),
+            ]),
+            if (bottom != null) bottom!,
+          ]),
+        );
+      case 'pill':
+        // Compact white pill floating on the page.
+        body = Container(
+          color: statusBg,
+          padding: EdgeInsets.only(top: top),
+          child: Container(
+            color: pageBg,
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+            child: Container(
+              height: 56,
+              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(18), border: Border.all(color: const Color(0xFFE2E8F0)), boxShadow: const [BoxShadow(color: Color(0x14000000), blurRadius: 16, offset: Offset(0, 6))]),
+              child: IconTheme(
+                data: IconThemeData(color: bg, size: 22),
+                child: Row(children: [
+                  if (leading != null) leading! else const SizedBox(width: 14),
+                  if (logo != null) Padding(padding: const EdgeInsets.only(right: 8), child: logo),
+                  Expanded(child: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Color(0xFF0F172A), fontSize: 17, fontWeight: FontWeight.w700))),
+                  ...actions,
+                  const SizedBox(width: 4),
+                ]),
+              ),
+            ),
+          ),
+        );
       case 'island':
         body = Container(
           color: statusBg,
@@ -494,7 +609,7 @@ class LFHeader extends StatelessWidget {
         );
     }
     // Status bar icons follow the header colour (dark icons on light headers).
-    final topColor = statusCustom ? statusBg : ({'minimal': pageBg, 'bold': pageBg, 'floating': statusBg, 'island': statusBg, 'transparent': statusBg}[design] ?? bg);
+    final topColor = statusCustom ? statusBg : ({'minimal': pageBg, 'bold': pageBg, 'search': pageBg, 'greeting': pageBg, 'floating': statusBg, 'island': statusBg, 'transparent': statusBg, 'pill': statusBg}[design] ?? bg);
     final darkIcons = topColor.computeLuminance() > .6;
     // Hide on scroll: the header slides up and collapses; the status bar area stays coloured.
     return AnnotatedRegion<SystemUiOverlayStyle>(
@@ -846,6 +961,63 @@ class LFDrawerHeader extends StatelessWidget {
             ],
           ]),
         );
+      case 'circles':
+        // Soft concentric circles behind the logo (light or dark).
+        return SizedBox(
+          height: top + 150,
+          child: Stack(clipBehavior: Clip.hardEdge, children: [
+            for (final r in [260.0, 190.0, 125.0])
+              Positioned(left: -r / 2 + 40, top: top - r / 2 + 50, child: Container(width: r, height: r, decoration: BoxDecoration(shape: BoxShape.circle, color: color.withOpacity(dark ? .16 : .10)))),
+            Positioned(
+              left: 18,
+              right: 12,
+              top: top + 34,
+              child: Row(children: [
+                ClipOval(child: AppLogo(url: logoUrl, size: 70, radius: 0)),
+                const SizedBox(width: 14),
+                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: dark ? Colors.white : color, fontSize: 21, fontWeight: FontWeight.w800)),
+                  if (subtitle.isNotEmpty) Text(subtitle, style: TextStyle(color: ink.withOpacity(.6), fontSize: 13)),
+                ])),
+              ]),
+            ),
+          ]),
+        );
+      case 'close':
+        // Clean row with a close button and a divider under it.
+        return Container(
+          margin: const EdgeInsets.symmetric(horizontal: 18),
+          padding: EdgeInsets.only(top: top + 18, bottom: 16),
+          decoration: BoxDecoration(border: Border(bottom: BorderSide(color: ink.withOpacity(.1)))),
+          child: Row(children: [
+            ClipOval(child: AppLogo(url: logoUrl, size: 48, radius: 0)),
+            const SizedBox(width: 12),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: ink, fontSize: 17, fontWeight: FontWeight.w700)),
+              if (subtitle.isNotEmpty) Text(subtitle, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: ink.withOpacity(.5), fontSize: 13)),
+            ])),
+            Builder(builder: (ctx) => InkWell(
+                  customBorder: const CircleBorder(),
+                  onTap: () => Navigator.of(ctx).maybePop(),
+                  child: Container(width: 38, height: 38, decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: ink.withOpacity(.12))), child: Icon(Icons.close_rounded, size: 18, color: ink)),
+                )),
+          ]),
+        );
+      case 'center':
+        // Small brand mark on top, logo + name centred, divider.
+        return Container(
+          margin: const EdgeInsets.symmetric(horizontal: 18),
+          padding: EdgeInsets.only(top: top + 16, bottom: 18),
+          decoration: BoxDecoration(border: Border(bottom: BorderSide(color: ink.withOpacity(.1)))),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Container(width: 34, height: 34, decoration: BoxDecoration(gradient: LinearGradient(colors: [color, c2]), borderRadius: BorderRadius.circular(10)), child: const Icon(Icons.bolt_rounded, color: Colors.white, size: 20)),
+            const SizedBox(height: 18),
+            Container(padding: const EdgeInsets.all(3), decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: color, width: 2)), child: ClipOval(child: AppLogo(url: logoUrl, size: 58, radius: 0))),
+            const SizedBox(height: 10),
+            Text(title, style: TextStyle(color: ink, fontSize: 17, fontWeight: FontWeight.w800)),
+            if (subtitle.isNotEmpty) Text(subtitle, style: TextStyle(color: ink.withOpacity(.55), fontSize: 13)),
+          ]),
+        );
       case 'compact':
         return Padding(
           padding: EdgeInsets.fromLTRB(20, top + 22, 16, 14),
@@ -905,4 +1077,52 @@ class _WaveClip extends CustomClipper<Path> {
     ..close();
   @override
   bool shouldReclip(covariant CustomClipper<Path> oldClipper) => false;
+}
+
+
+/// Rounded search field used by the Search header; submits to the website's search page.
+class _SearchField extends StatefulWidget {
+  const _SearchField({required this.hint, required this.ink, required this.light, this.onSubmit});
+  final String hint;
+  final Color ink;
+  final bool light;
+  final ValueChanged<String>? onSubmit;
+  @override
+  State<_SearchField> createState() => _SearchFieldState();
+}
+
+class _SearchFieldState extends State<_SearchField> {
+  final _c = TextEditingController();
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Container(
+        height: 50,
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        decoration: BoxDecoration(
+          color: widget.light ? Colors.white : Colors.white.withOpacity(.08),
+          borderRadius: BorderRadius.circular(26),
+          boxShadow: widget.light ? const [BoxShadow(color: Color(0x12000000), blurRadius: 14, offset: Offset(0, 5))] : null,
+        ),
+        child: Row(children: [
+          Icon(Icons.search_rounded, color: widget.ink.withOpacity(.55)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: TextField(
+              controller: _c,
+              textInputAction: TextInputAction.search,
+              style: TextStyle(color: widget.ink, fontSize: 15.5),
+              decoration: InputDecoration(border: InputBorder.none, isDense: true, hintText: widget.hint, hintStyle: TextStyle(color: widget.ink.withOpacity(.45))),
+              onSubmitted: (v) {
+                if (v.trim().isNotEmpty) widget.onSubmit?.call(v.trim());
+                FocusScope.of(context).unfocus();
+              },
+            ),
+          ),
+        ]),
+      );
 }

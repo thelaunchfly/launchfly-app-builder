@@ -52,11 +52,11 @@ IconData iconOf(dynamic n) => (outlineIcons ? _outline : _filled)[n] ?? (outline
 class NavItem {
   NavItem(Map j)
       : label = '${j['label'] ?? j['title'] ?? ''}',
-        icon = iconOf(j['icon']),
+        icon = '${j['icon'] ?? 'home'}',
         url = '${j['url'] ?? ''}',
         children = ((j['children'] as List?) ?? []).map((e) => NavItem(e as Map)).toList();
   final String label;
-  final IconData icon;
+  final String icon;
   final String url;
   final List<NavItem> children;
 }
@@ -188,6 +188,10 @@ Future<void> main() async {
       merged.addAll(jsonDecode(cached) as Map<String, dynamic>);
     } catch (_) {}
   }
+  try {
+    iconLibrary = jsonDecode(await rootBundle.loadString('assets/icons.json')) as Map<String, dynamic>;
+  } catch (_) {}
+  builtinIcon = iconOf;
   final cfg = Cfg(merged);
   outlineIcons = cfg.v('style', 'icons', 'outline') != 'filled';
   applySystemUi(cfg);
@@ -872,6 +876,11 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
       fg: fg,
       statusBg: hexColor(c.v('style', 'status_bg'), bg),
       statusCustom: c.v('style', 'status_mode', 'header') == 'custom',
+      searchHint: '${h['search_hint'] ?? 'Search'}',
+      onSearch: (q) {
+        final tpl = '${h['search_url'] ?? ''}';
+        open(tpl.contains('{q}') ? tpl.replaceAll('{q}', Uri.encodeQueryComponent(q)) : '${c.url}${c.url.contains('?') ? '&' : '?'}s=${Uri.encodeQueryComponent(q)}');
+      },
       pageBg: c.pageBg,
       title: '${h['title'] ?? c.name}',
       subtitle: '${h['subtitle'] ?? ''}',
@@ -884,7 +893,7 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
       actions: [
         if (c.v('notify', 'enabled', true) != false && c.v('notify', 'inbox', true) != false)
           IconButton(icon: Badge(isLabelVisible: _unread > 0, label: Text('$_unread'), child: Icon(outlineIcons ? LucideIcons.bell : Icons.notifications_rounded)), onPressed: _openInbox),
-        for (final ri in ((h['right_icons'] as List?) ?? []).cast<Map>()) IconButton(icon: Icon(iconOf(ri['icon'])), onPressed: () => _action(ri)),
+        for (final ri in ((h['right_icons'] as List?) ?? []).cast<Map>()) IconButton(icon: AppIco('${ri['icon']}'), onPressed: () => _action(ri)),
       ],
       bottom: c.hasTabs && _tabs != null ? _tabBar(h['design'] == 'minimal' ? c.pageBg : bg, h['design'] == 'minimal' ? bg : fg) : null,
     );
@@ -901,7 +910,7 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
     final design = '${c.v('tabs', 'design', 'underline')}';
     final items = c.items('tabs');
     final withIcon = c.v('tabs', 'style') == 'icon_title';
-    final tabs = [for (final t in items) Tab(height: withIcon ? 56 : 40, text: t.label, icon: withIcon ? Icon(t.icon, size: 20) : null)];
+    final tabs = [for (final t in items) Tab(height: withIcon ? 56 : 40, text: t.label, icon: withIcon ? AppIco(t.icon, size: 20) : null)];
     final scroll = items.length > 4;
     TabBar bar;
     switch (design) {
@@ -932,12 +941,12 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
     final ic = light ? hexColor(c.v('drawer', 'icon_color'), c.primary) : text;
     text ??= const Color(0xFF0F172A);
     if (it.children.isNotEmpty) {
-      return ExpansionTile(leading: Icon(it.icon, color: ic), title: Text(it.label, style: TextStyle(color: text)), iconColor: text, collapsedIconColor: text,
+      return ExpansionTile(leading: AppIco(it.icon, color: ic), title: Text(it.label, style: TextStyle(color: text)), iconColor: text, collapsedIconColor: text,
           textColor: text, collapsedTextColor: text, shape: const Border(), collapsedShape: const Border(),
           children: [for (final ch in it.children) Padding(padding: const EdgeInsets.only(left: 14), child: _drawerItem(ch, text: text, rounded: rounded))]);
     }
     final tile = ListTile(
-      leading: Icon(it.icon, color: ic),
+      leading: AppIco(it.icon, color: ic, size: 22),
       title: Text(it.label, style: TextStyle(color: first && light ? ic : text, fontWeight: first ? FontWeight.w700 : FontWeight.w500)),
       shape: rounded ? RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)) : null,
       tileColor: first ? (light ? ic.withOpacity(.12) : Colors.white.withOpacity(.12)) : null,
@@ -1022,7 +1031,7 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
         final on = i == sel;
         final col = on ? active : idle;
         return Expanded(child: GestureDetector(behavior: HitTestBehavior.opaque, onTap: () => tap(i), child: Column(mainAxisSize: MainAxisSize.min, mainAxisAlignment: MainAxisAlignment.center, children: [
-          AnimatedScale(scale: on ? 1.12 : 1, duration: const Duration(milliseconds: 300), curve: Curves.easeOutBack, child: Icon(items[i].icon, color: col)),
+          AnimatedScale(scale: on ? 1.12 : 1, duration: const Duration(milliseconds: 300), curve: Curves.easeOutBack, child: AppIco(items[i].icon, color: col)),
           if (style != 'icons' && (style != 'selected' || on)) Padding(padding: const EdgeInsets.only(top: 3), child: Text(items[i].label, style: TextStyle(color: col, fontSize: 11, fontWeight: on ? FontWeight.w700 : FontWeight.w500))),
         ])));
       }
@@ -1131,11 +1140,11 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
                   setState(() => _tab = mid);
                   open(c.items('bottom_nav')[mid].url);
                 },
-                child: Icon(c.items('bottom_nav')[c.items('bottom_nav').length ~/ 2].icon))
+                child: AppIco(c.items('bottom_nav')[c.items('bottom_nav').length ~/ 2].icon, color: Colors.white))
             : fab['type'] == null || fab['type'] == 'none'
             ? null
             : Padding(
-                padding: EdgeInsets.only(bottom: _floatingBar ? 74 : 0),
+                padding: EdgeInsets.only(bottom: _floatingBar ? 6 : 0),
                 child: LFFab(
                   design: '${fab['design'] ?? (fab['style'] == 'extended' ? 'pill' : 'circle')}',
                   color: hexColor(fab['color'], Colors.green),
@@ -1188,50 +1197,101 @@ class _InboxViewState extends State<InboxView> {
   Widget build(BuildContext context) {
     final c = widget.cfg;
     final h = c.m('header');
+    final bg = hexColor(h['bg'], c.primary);
+    final bg2 = '${h['bg2'] ?? ''}'.isNotEmpty ? hexColor(h['bg2'], bg) : Color.lerp(bg, Colors.black, .35)!;
+    final fg = hexColor(h['fg'], Colors.white);
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final card = dark ? const Color(0xFF1E293B) : Colors.white;
+    final ink = dark ? Colors.white : const Color(0xFF0F172A);
+    final accent = bg.computeLuminance() < .05 && dark ? Colors.white : bg;
     return Scaffold(
-      appBar: AppBar(title: const Text('Notifications'), backgroundColor: hexColor(h['bg'], c.primary), foregroundColor: hexColor(h['fg'], Colors.white)),
-      body: items.isEmpty
-          ? Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
-              Icon(Icons.notifications_none_rounded, size: 64, color: c.primary.withOpacity(.5)),
-              const SizedBox(height: 12),
-              const Text('No notifications yet', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
-            ]))
-          : RefreshIndicator(
-              onRefresh: () async {
-                await checkInbox(Map<String, dynamic>.from(c.raw), show: false);
-                await _load();
-              },
-              child: ListView.separated(
-                padding: const EdgeInsets.all(16),
-                itemCount: items.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 10),
-                itemBuilder: (_, i) {
-                  final it = items[i];
-                  final img = '${it['image'] ?? ''}';
-                  final url = '${it['url'] ?? ''}';
-                  return Material(
-                    color: Theme.of(context).colorScheme.surfaceContainerHighest.withOpacity(.5),
-                    borderRadius: BorderRadius.circular(16),
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(16),
-                      onTap: url.isEmpty ? null : () => Navigator.pop(context, url),
-                      child: Padding(
-                        padding: const EdgeInsets.all(14),
-                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                          Row(children: [
-                            Expanded(child: Text('${it['title']}', style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15))),
-                            Text(_ago(it['at'] as num?), style: const TextStyle(fontSize: 12, color: Colors.grey)),
-                          ]),
-                          const SizedBox(height: 4),
-                          Text('${it['body']}'),
-                          if (img.isNotEmpty) Padding(padding: const EdgeInsets.only(top: 10), child: ClipRRect(borderRadius: BorderRadius.circular(12), child: Image.network(img, fit: BoxFit.cover, errorBuilder: (_, __, ___) => const SizedBox()))),
-                        ]),
-                      ),
-                    ),
-                  );
-                },
-              ),
+      backgroundColor: dark ? const Color(0xFF0F172A) : const Color(0xFFF4F6FA),
+      body: Column(children: [
+        Container(
+          padding: EdgeInsets.fromLTRB(8, MediaQuery.of(context).padding.top + 6, 16, 22),
+          decoration: BoxDecoration(gradient: LinearGradient(colors: [bg, bg2], begin: Alignment.topLeft, end: Alignment.bottomRight), borderRadius: const BorderRadius.vertical(bottom: Radius.circular(28))),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            IconButton(icon: Icon(outlineIcons ? LucideIcons.arrowLeft : Icons.arrow_back_rounded, color: fg), onPressed: () => Navigator.pop(context)),
+            Padding(
+              padding: const EdgeInsets.only(left: 10),
+              child: Row(children: [
+                Expanded(child: Text('Notifications', style: TextStyle(color: fg, fontSize: 28, fontWeight: FontWeight.w800, letterSpacing: -.6))),
+                if (items.isNotEmpty)
+                  Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5), decoration: BoxDecoration(color: Colors.white.withOpacity(.2), borderRadius: BorderRadius.circular(20)), child: Text('${items.length}', style: TextStyle(color: fg, fontWeight: FontWeight.w700))),
+              ]),
             ),
+            Padding(padding: const EdgeInsets.only(left: 10, top: 2), child: Text('News and offers from ${c.name}', style: TextStyle(color: fg.withOpacity(.75)))),
+          ]),
+        ),
+        Expanded(
+          child: items.isEmpty
+              ? Center(
+                  child: Column(mainAxisSize: MainAxisSize.min, children: [
+                    Container(width: 96, height: 96, decoration: BoxDecoration(color: accent.withOpacity(.1), shape: BoxShape.circle), child: Icon(LucideIcons.bellOff, size: 40, color: accent)),
+                    const SizedBox(height: 16),
+                    Text('No notifications yet', style: TextStyle(color: ink, fontSize: 18, fontWeight: FontWeight.w800)),
+                    const SizedBox(height: 6),
+                    Text('We\'ll let you know when something new arrives.', style: TextStyle(color: ink.withOpacity(.55))),
+                  ]),
+                )
+              : RefreshIndicator(
+                  onRefresh: () async {
+                    await checkInbox(Map<String, dynamic>.from(c.raw), show: false);
+                    await _load();
+                  },
+                  child: ListView.separated(
+                    padding: const EdgeInsets.fromLTRB(16, 18, 16, 24),
+                    itemCount: items.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 12),
+                    itemBuilder: (_, i) {
+                      final it = items[i];
+                      final img = '${it['image'] ?? ''}';
+                      final url = '${it['url'] ?? ''}';
+                      return TweenAnimationBuilder<double>(
+                        tween: Tween(begin: 0, end: 1),
+                        duration: Duration(milliseconds: 300 + i * 60),
+                        curve: Curves.easeOutCubic,
+                        builder: (_, t, ch) => Opacity(opacity: t, child: Transform.translate(offset: Offset(0, 16 * (1 - t)), child: ch)),
+                        child: Material(
+                          color: card,
+                          borderRadius: BorderRadius.circular(20),
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(20),
+                            onTap: url.isEmpty ? null : () => Navigator.pop(context, url),
+                            child: Padding(
+                              padding: const EdgeInsets.all(14),
+                              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                  Container(width: 44, height: 44, decoration: BoxDecoration(gradient: LinearGradient(colors: [bg, bg2]), borderRadius: BorderRadius.circular(14)), child: Icon(LucideIcons.bell, color: fg, size: 20)),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                      Row(children: [
+                                        Expanded(child: Text('${it['title']}', style: TextStyle(color: ink, fontWeight: FontWeight.w800, fontSize: 15.5))),
+                                        Text(_ago(it['at'] as num?), style: TextStyle(fontSize: 12, color: ink.withOpacity(.45))),
+                                      ]),
+                                      const SizedBox(height: 4),
+                                      Text('${it['body']}', style: TextStyle(color: ink.withOpacity(.7), height: 1.4)),
+                                    ]),
+                                  ),
+                                ]),
+                                if (img.isNotEmpty)
+                                  Padding(padding: const EdgeInsets.only(top: 12), child: ClipRRect(borderRadius: BorderRadius.circular(14), child: Image.network(img, fit: BoxFit.cover, errorBuilder: (_, __, ___) => const SizedBox()))),
+                                if (url.isNotEmpty)
+                                  Padding(
+                                    padding: const EdgeInsets.only(top: 10, left: 56),
+                                    child: Row(children: [Text('Open', style: TextStyle(color: accent, fontWeight: FontWeight.w700)), const SizedBox(width: 4), Icon(LucideIcons.arrowRight, size: 16, color: accent)]),
+                                  ),
+                              ]),
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+        ),
+      ]),
     );
   }
 }
@@ -1279,71 +1339,117 @@ class AboutView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final a = cfg.m('about');
-    final links = <(IconData, String, String)>[
-      (LucideIcons.messageCircle, 'WhatsApp', '${a['whatsapp'] ?? ''}'.isNotEmpty ? 'https://wa.me/${'${a['whatsapp']}'.replaceAll(RegExp(r'\D'), '')}' : ''),
-      (LucideIcons.phone, 'Call', '${a['phone'] ?? ''}'.isNotEmpty ? 'tel:${a['phone']}' : ''),
-      (LucideIcons.mail, 'Email', '${a['email'] ?? ''}'.isNotEmpty ? 'mailto:${a['email']}' : ''),
-      (LucideIcons.globe, 'Website', '${a['website'] ?? ''}'),
-      (LucideIcons.facebook, 'Facebook', '${a['facebook'] ?? ''}'),
-      (LucideIcons.instagram, 'Instagram', '${a['instagram'] ?? ''}'),
-      (LucideIcons.twitter, 'X / Twitter', '${a['twitter'] ?? ''}'),
-      (LucideIcons.youtube, 'YouTube', '${a['youtube'] ?? ''}'),
-      (LucideIcons.music2, 'TikTok', '${a['tiktok'] ?? ''}'),
-      (LucideIcons.ghost, 'Snapchat', '${a['snapchat'] ?? ''}'),
-      (LucideIcons.messagesSquare, 'Messenger', '${a['messenger'] ?? ''}'),
-      (LucideIcons.video, 'Skype', '${a['skype'] ?? ''}'.isNotEmpty ? 'skype:${a['skype']}?chat' : ''),
+    String v(String k) => '${a[k] ?? ''}'.trim();
+    // (icon, label, link, brand colour)
+    final quick = <(IconData, String, String, Color)>[
+      if (v('phone').isNotEmpty) (LucideIcons.phone, 'Call', 'tel:${v('phone')}', const Color(0xFF2563EB)),
+      if (v('whatsapp').isNotEmpty) (LucideIcons.messageCircle, 'WhatsApp', 'https://wa.me/${v('whatsapp').replaceAll(RegExp(r'\D'), '')}', const Color(0xFF16A34A)),
+      if (v('email').isNotEmpty) (LucideIcons.mail, 'Email', 'mailto:${v('email')}', const Color(0xFFEA580C)),
+      if (v('website').isNotEmpty) (LucideIcons.globe, 'Website', v('website'), const Color(0xFF7C3AED)),
+    ];
+    final social = <(IconData, String, String, Color)>[
+      (LucideIcons.facebook, 'Facebook', v('facebook'), const Color(0xFF1877F2)),
+      (LucideIcons.instagram, 'Instagram', v('instagram'), const Color(0xFFE1306C)),
+      (LucideIcons.twitter, 'X / Twitter', v('twitter'), const Color(0xFF0F172A)),
+      (LucideIcons.youtube, 'YouTube', v('youtube'), const Color(0xFFFF0000)),
+      (LucideIcons.music2, 'TikTok', v('tiktok'), const Color(0xFF111111)),
+      (LucideIcons.ghost, 'Snapchat', v('snapchat'), const Color(0xFFF7C600)),
+      (LucideIcons.messagesSquare, 'Messenger', v('messenger'), const Color(0xFF0084FF)),
+      (LucideIcons.video, 'Skype', v('skype').isNotEmpty ? 'skype:${v('skype')}?chat' : '', const Color(0xFF00AFF0)),
     ].where((l) => l.$3.isNotEmpty).toList();
     final h = cfg.m('header');
     final bg = hexColor(h['bg'], cfg.primary);
-    final bg2 = '${h['bg2'] ?? ''}'.isNotEmpty ? hexColor(h['bg2'], bg) : Color.lerp(bg, Colors.black, .3)!;
+    final bg2 = '${h['bg2'] ?? ''}'.isNotEmpty ? hexColor(h['bg2'], bg) : Color.lerp(bg, Colors.black, .35)!;
     final fg = hexColor(h['fg'], Colors.white);
     final dark = Theme.of(context).brightness == Brightness.dark;
     final card = dark ? const Color(0xFF1E293B) : Colors.white;
     final ink = dark ? Colors.white : const Color(0xFF0F172A);
+    void go(String url) => launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
     return Scaffold(
-      backgroundColor: dark ? const Color(0xFF0F172A) : const Color(0xFFF1F5F9),
+      backgroundColor: dark ? const Color(0xFF0F172A) : const Color(0xFFF4F6FA),
       body: CustomScrollView(slivers: [
         SliverToBoxAdapter(
-          child: Container(
-            padding: EdgeInsets.fromLTRB(16, MediaQuery.of(context).padding.top + 8, 16, 34),
-            decoration: BoxDecoration(gradient: LinearGradient(colors: [bg, bg2], begin: Alignment.topLeft, end: Alignment.bottomRight), borderRadius: const BorderRadius.vertical(bottom: Radius.circular(32))),
-            child: Column(children: [
-              Align(alignment: Alignment.centerLeft, child: IconButton(icon: Icon(outlineIcons ? LucideIcons.arrowLeft : Icons.arrow_back_rounded, color: fg), onPressed: () => Navigator.pop(context))),
-              Container(padding: const EdgeInsets.all(4), decoration: BoxDecoration(color: Colors.white.withOpacity(.25), borderRadius: BorderRadius.circular(30)), child: AppLogo(url: cfg.iconUrl, size: 96, radius: 26)),
-              const SizedBox(height: 14),
-              Text(cfg.name, textAlign: TextAlign.center, style: TextStyle(color: fg, fontSize: 26, fontWeight: FontWeight.w800)),
-              if ('${a['text'] ?? ''}'.isNotEmpty)
-                Padding(padding: const EdgeInsets.only(top: 8), child: Text('${a['text']}', textAlign: TextAlign.center, style: TextStyle(color: fg.withOpacity(.85), fontSize: 15, height: 1.45))),
-            ]),
-          ),
-        ),
-        SliverPadding(
-          padding: const EdgeInsets.fromLTRB(16, 20, 16, 30),
-          sliver: SliverList.separated(
-            itemCount: links.length,
-            separatorBuilder: (_, __) => const SizedBox(height: 10),
-            itemBuilder: (_, i) {
-              final l = links[i];
-              return Material(
-                color: card,
-                borderRadius: BorderRadius.circular(18),
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(18),
-                  onTap: () => launchUrl(Uri.parse(l.$3), mode: LaunchMode.externalApplication),
-                  child: Padding(
-                    padding: const EdgeInsets.all(14),
-                    child: Row(children: [
-                      Container(width: 42, height: 42, decoration: BoxDecoration(color: bg.withOpacity(.12), borderRadius: BorderRadius.circular(13)), child: Icon(l.$1, color: bg.computeLuminance() < .05 && dark ? Colors.white : bg, size: 21)),
-                      const SizedBox(width: 14),
-                      Expanded(child: Text(l.$2, style: TextStyle(color: ink, fontSize: 15.5, fontWeight: FontWeight.w600))),
-                      Icon(outlineIcons ? LucideIcons.chevronRight : Icons.chevron_right_rounded, color: ink.withOpacity(.4)),
+          child: Stack(clipBehavior: Clip.none, children: [
+            Container(
+              height: MediaQuery.of(context).padding.top + 190,
+              decoration: BoxDecoration(gradient: LinearGradient(colors: [bg, bg2], begin: Alignment.topLeft, end: Alignment.bottomRight)),
+              child: Stack(children: [
+                Positioned(right: -60, top: -40, child: Container(width: 220, height: 220, decoration: BoxDecoration(shape: BoxShape.circle, color: Colors.white.withOpacity(.08)))),
+                Positioned(left: -30, bottom: -70, child: Container(width: 160, height: 160, decoration: BoxDecoration(shape: BoxShape.circle, color: Colors.white.withOpacity(.06)))),
+                Positioned(
+                  left: 8,
+                  top: MediaQuery.of(context).padding.top + 6,
+                  child: IconButton(icon: Icon(outlineIcons ? LucideIcons.arrowLeft : Icons.arrow_back_rounded, color: fg), onPressed: () => Navigator.pop(context)),
+                ),
+                Positioned(left: 0, right: 0, top: MediaQuery.of(context).padding.top + 16, child: Text('About', textAlign: TextAlign.center, style: TextStyle(color: fg, fontSize: 17, fontWeight: FontWeight.w700))),
+              ]),
+            ),
+            Padding(
+              padding: EdgeInsets.fromLTRB(16, MediaQuery.of(context).padding.top + 110, 16, 0),
+              child: Container(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 22),
+                decoration: BoxDecoration(color: card, borderRadius: BorderRadius.circular(28), boxShadow: const [BoxShadow(color: Color(0x1A000000), blurRadius: 30, offset: Offset(0, 12))]),
+                child: Column(children: [
+                  Transform.translate(
+                    offset: const Offset(0, -42),
+                    child: Container(padding: const EdgeInsets.all(5), decoration: BoxDecoration(color: card, borderRadius: BorderRadius.circular(30)), child: AppLogo(url: cfg.iconUrl, size: 88, radius: 24)),
+                  ),
+                  Transform.translate(
+                    offset: const Offset(0, -28),
+                    child: Column(children: [
+                      Text(cfg.name, textAlign: TextAlign.center, style: TextStyle(color: ink, fontSize: 24, fontWeight: FontWeight.w800, letterSpacing: -.4)),
+                      if (v('text').isNotEmpty) Padding(padding: const EdgeInsets.only(top: 8), child: Text(v('text'), textAlign: TextAlign.center, style: TextStyle(color: ink.withOpacity(.65), fontSize: 15, height: 1.5))),
                     ]),
                   ),
-                ),
-              );
-            },
-          ),
+                  if (quick.isNotEmpty)
+                    Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
+                      for (final q in quick)
+                        GestureDetector(
+                          onTap: () => go(q.$3),
+                          child: Column(children: [
+                            Container(width: 54, height: 54, decoration: BoxDecoration(color: q.$4.withOpacity(.12), borderRadius: BorderRadius.circular(18)), child: Icon(q.$1, color: q.$4, size: 23)),
+                            const SizedBox(height: 6),
+                            Text(q.$2, style: TextStyle(color: ink.withOpacity(.75), fontSize: 12.5, fontWeight: FontWeight.w600)),
+                          ]),
+                        ),
+                    ]),
+                ]),
+              ),
+            ),
+          ]),
         ),
+        if (social.isNotEmpty) ...[
+          SliverToBoxAdapter(child: Padding(padding: const EdgeInsets.fromLTRB(22, 26, 22, 10), child: Text('Follow us', style: TextStyle(color: ink, fontSize: 17, fontWeight: FontWeight.w800)))),
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 30),
+            sliver: SliverGrid.count(
+              crossAxisCount: 2,
+              mainAxisSpacing: 12,
+              crossAxisSpacing: 12,
+              childAspectRatio: 2.6,
+              children: [
+                for (final l in social)
+                  Material(
+                    color: card,
+                    borderRadius: BorderRadius.circular(18),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(18),
+                      onTap: () => go(l.$3),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        child: Row(children: [
+                          Container(width: 38, height: 38, decoration: BoxDecoration(color: l.$4, borderRadius: BorderRadius.circular(12)), child: Icon(l.$1, color: Colors.white, size: 19)),
+                          const SizedBox(width: 10),
+                          Expanded(child: Text(l.$2, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: ink, fontWeight: FontWeight.w600))),
+                        ]),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ] else
+          const SliverToBoxAdapter(child: SizedBox(height: 30)),
       ]),
     );
   }

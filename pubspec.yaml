@@ -23,6 +23,7 @@ dependencies:
   workmanager: ^0.5.2
   flutter_spinkit: 5.2.1
   lucide_icons: 0.257.0
+  flutter_svg: 2.0.10+1
 
 dev_dependencies:
   flutter_test:
@@ -35,6 +36,7 @@ flutter:
   assets:
     - assets/app_config.json
     - assets/icon.png
+    - assets/icons.json
 
 flutter_launcher_icons:
   android: true
