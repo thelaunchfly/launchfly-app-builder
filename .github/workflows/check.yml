@@ -1,0 +1,49 @@
+name: Check and promote
+
+# Every change is compiled with the same Flutter version customer builds use.
+# Only when it builds does the "stable" branch move forward, so a broken change never reaches customers.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: check-main
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.24.5"
+          channel: stable
+          cache: true
+
+      - name: Build a test app exactly like a customer build
+        run: |
+          flutter create --platforms=android --org com.thelaunchfly --project-name launchfly_app .
+          mkdir -p android/app && keytool -genkeypair -keystore android/app/upload.jks -alias upload -keyalg RSA -keysize 2048 -validity 1 -storepass checkcheck -keypass checkcheck -dname "CN=check" >/dev/null 2>&1
+          printf "storeFile=upload.jks\nstorePassword=checkcheck\nkeyPassword=checkcheck\nkeyAlias=upload\n" > android/key.properties
+          python3 tool/patch_android.py com.thelaunchfly.check "Check"
+          flutter pub get
+          flutter analyze --no-fatal-infos --no-fatal-warnings
+          flutter build apk --release
+
+      - name: Promote to stable
+        run: |
+          git push origin HEAD:refs/heads/stable --force

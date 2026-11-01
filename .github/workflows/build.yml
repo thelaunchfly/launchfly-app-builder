@@ -24,7 +24,10 @@ jobs:
       API: ${{ inputs.server }}/api/app-build/${{ inputs.build_id }}
       SECRET: ${{ secrets.BUILD_SECRET }}
     steps:
+      # Customer builds always use the "stable" branch: code that passed the check workflow.
       - uses: actions/checkout@v4
+        with:
+          ref: stable
 
       - name: Report start
         run: |
