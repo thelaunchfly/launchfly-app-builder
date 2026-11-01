@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:ui' show ImageFilter;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -16,6 +15,8 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
 import 'package:workmanager/workmanager.dart';
+
+import 'ui_kit.dart';
 
 Color hexColor(dynamic hex, Color fallback) {
   if (hex is! String || !RegExp(r'^#[0-9a-fA-F]{6}$').hasMatch(hex)) return fallback;
@@ -441,9 +442,13 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
     _loadUnread();
     _web = WebViewController()
       ..setBackgroundColor(c.pageBg)
+      ..addJavaScriptChannel('LFScroll', onMessageReceived: _onScrollMsg)
       ..setNavigationDelegate(NavigationDelegate(
         onProgress: (p) => setState(() => _progress = p),
-        onPageStarted: (_) => setState(() => _offline = false),
+        onPageStarted: (_) => setState(() {
+              _offline = false;
+              _barsHidden = false;
+            }),
         onPageFinished: (_) => _inject(),
         onWebResourceError: (err) {
           if (err.isForMainFrame ?? true) setState(() => _offline = true);
@@ -595,6 +600,9 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
     css += '${app['custom_css'] ?? ''}';
     if (css.trim().isNotEmpty) {
       await _web.runJavaScript('(function(){var s=document.getElementById("lf-hide")||document.head.appendChild(Object.assign(document.createElement("style"),{id:"lf-hide"}));s.textContent=${jsonEncode(css)}})();');
+    }
+    if (c.m('header')['hide_on_scroll'] == true || c.m('bottom_nav')['hide_on_scroll'] == true) {
+      await _web.runJavaScript('(function(){if(window.__lfs)return;window.__lfs=1;var y=scrollY,s="up";addEventListener("scroll",function(){var n=scrollY,d=n>y+12&&n>80?"down":(n<y-12||n<40?"up":s);y=n;if(d!==s){s=d;LFScroll.postMessage(d)}},{passive:true})})();');
     }
     final js = '${app['custom_js'] ?? ''}'.trim();
     if (js.isNotEmpty) {
@@ -791,7 +799,11 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
     if (leave == true) await SystemNavigator.pop();
   }
 
-  PreferredSizeWidget? _appBar() {
+  final _sk = GlobalKey<ScaffoldState>();
+  bool _barsHidden = false;
+
+  /// The top header (designs: classic, minimal, floating, glass, curved, large).
+  Widget? _header() {
     final h = c.m('header');
     if (h['enabled'] == false) return null;
     final bg = hexColor(h['bg'], c.primary);
@@ -803,27 +815,37 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
       leading = IconButton(icon: const Icon(Icons.arrow_back_rounded), onPressed: () => _web.goBack());
     } else if (left == 'home') {
       leading = IconButton(icon: const Icon(Icons.home_rounded), onPressed: () => open(c.url));
+    } else if (c.hasDrawer && (left == 'auto' || left == 'menu')) {
+      leading = IconButton(icon: const Icon(Icons.menu_rounded), onPressed: () => _sk.currentState?.openDrawer());
     }
-    return AppBar(
-      systemOverlayStyle: c.overlay,
-      foregroundColor: fg,
-      backgroundColor: bg,
-      flexibleSpace: Container(decoration: BoxDecoration(gradient: LinearGradient(colors: [bg, bg2]))),
-      centerTitle: h['style'] == 'center',
-      automaticallyImplyLeading: c.hasDrawer && (left == 'auto' || left == 'menu'),
+    return LFHeader(
+      design: '${h['design'] ?? 'classic'}',
+      bg: bg,
+      bg2: bg2,
+      fg: fg,
+      statusBg: hexColor(c.v('style', 'status_bg'), bg),
+      pageBg: c.pageBg,
+      title: '${h['title'] ?? c.name}',
+      subtitle: '${h['subtitle'] ?? ''}',
+      center: h['style'] == 'center',
+      hidden: _barsHidden && h['hide_on_scroll'] == true,
       leading: leading,
-      title: Row(mainAxisSize: MainAxisSize.min, children: [
-        if (h['show_logo'] == true && c.iconUrl.isNotEmpty)
-          Padding(padding: const EdgeInsets.only(right: 10), child: ClipRRect(borderRadius: BorderRadius.circular(6), child: Image.network(c.iconUrl, width: 26, height: 26, errorBuilder: (_, __, ___) => const SizedBox()))),
-        Flexible(child: Text('${h['title'] ?? c.name}', overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w700))),
-      ]),
+      logo: h['show_logo'] == true && c.iconUrl.isNotEmpty
+          ? ClipRRect(borderRadius: BorderRadius.circular(8), child: Image.network(c.iconUrl, width: 30, height: 30, errorBuilder: (_, __, ___) => const SizedBox()))
+          : null,
       actions: [
         if (c.v('notify', 'enabled', true) != false && c.v('notify', 'inbox', true) != false)
           IconButton(icon: Badge(isLabelVisible: _unread > 0, label: Text('$_unread'), child: const Icon(Icons.notifications_rounded)), onPressed: _openInbox),
         for (final ri in ((h['right_icons'] as List?) ?? []).cast<Map>()) IconButton(icon: Icon(iconOf(ri['icon'])), onPressed: () => _action(ri)),
       ],
-      bottom: c.hasTabs && _tabs != null ? _tabBar(bg, fg) : null,
+      bottom: c.hasTabs && _tabs != null ? _tabBar(h['design'] == 'minimal' ? c.pageBg : bg, h['design'] == 'minimal' ? bg : fg) : null,
     );
+  }
+
+  /// The website reports scrolling so the header/bottom bar can hide while reading.
+  void _onScrollMsg(JavaScriptMessage m) {
+    final down = m.message == 'down';
+    if (down != _barsHidden && mounted) setState(() => _barsHidden = down);
   }
 
   /// Top tab designs: underline, pills, segmented, outline, light.
@@ -911,7 +933,7 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
     final list = ListView(padding: EdgeInsets.only(top: style == 'modern' ? top : 0, bottom: 16), children: [
       header,
       const SizedBox(height: 6),
-      for (var i = 0; i < c.items('drawer').length; i++) _drawerItem(c.items('drawer')[i], text: text, rounded: true, first: i == 0),
+      for (var i = 0; i < c.items('drawer').length; i++) SlideIn(index: i, child: _drawerItem(c.items('drawer')[i], text: text, rounded: true, first: i == 0)),
       if (c.pages.isNotEmpty) Divider(color: dark ? Colors.white24 : null),
       for (final pg in c.pages) _drawerItem(NavItem({'label': pg.label, 'icon': 'news', 'url': pg.url}), text: text, rounded: true),
       if (about['enabled'] == true)
@@ -938,9 +960,9 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
     return drawer;
   }
 
-  bool get _floatingBar => c.hasBottom && ['floating', 'glass'].contains('${c.v('bottom_nav', 'design', 'material')}');
+  bool get _floatingBar => c.hasBottom && LFBottomBar.floating.contains('${c.v('bottom_nav', 'design', 'material')}');
 
-  /// Bottom bar designs: material, floating, bubble, notch (centre button), minimal, glass.
+  /// Bottom bar: notch (centre button) is built here, every other design comes from LFBottomBar.
   Widget? _bottomBar(Color active) {
     if (!c.hasBottom) return null;
     final items = c.items('bottom_nav');
@@ -949,101 +971,51 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
     final design = '${bn['design'] ?? 'material'}';
     final style = '${bn['style'] ?? 'labels'}';
     final sel = _tab.clamp(0, items.length - 1);
-    final idle = bg.computeLuminance() > .5 ? Colors.black45 : Colors.white60;
-    bool label(bool on) => style == 'icons' ? false : (style == 'selected' ? on : true);
     void tap(int i) {
       setState(() => _tab = i);
       open(items[i].url);
     }
 
-    Widget btn(int i, {bool bubble = false, bool dot = false}) {
-      final on = i == sel;
-      final color = on ? active : idle;
-      final showLabel = !dot && label(on) && !(bubble && !on);
-      final child = bubble
-          ? AnimatedContainer(
-              duration: const Duration(milliseconds: 250),
-              padding: EdgeInsets.symmetric(horizontal: on ? 14 : 10, vertical: 9),
-              decoration: BoxDecoration(color: on ? active.withOpacity(.14) : Colors.transparent, borderRadius: BorderRadius.circular(30)),
-              child: Row(mainAxisSize: MainAxisSize.min, children: [
-                Icon(items[i].icon, color: color, size: 22),
-                if (showLabel) ...[const SizedBox(width: 6), Text(items[i].label, style: TextStyle(color: color, fontWeight: FontWeight.w700, fontSize: 13))],
-              ]),
-            )
-          : Column(mainAxisSize: MainAxisSize.min, children: [
-              Icon(items[i].icon, color: color, size: 24),
-              if (showLabel) Padding(padding: const EdgeInsets.only(top: 3), child: Text(items[i].label, style: TextStyle(color: color, fontSize: 11, fontWeight: on ? FontWeight.w700 : FontWeight.w500))),
-              if (dot) AnimatedContainer(duration: const Duration(milliseconds: 250), margin: const EdgeInsets.only(top: 4), width: on ? 6 : 0, height: 6, decoration: BoxDecoration(color: active, shape: BoxShape.circle)),
-            ]);
-      return Expanded(child: InkResponse(onTap: () => tap(i), radius: 32, child: Padding(padding: const EdgeInsets.symmetric(vertical: 6), child: Center(child: child))));
-    }
+    Widget bar;
+    if (design == 'notch') {
+      final idle = bg.computeLuminance() > .5 ? const Color(0xFF94A3B8) : Colors.white60;
+      final mid = items.length ~/ 2;
+      Widget btn(int i) {
+        final on = i == sel;
+        final col = on ? active : idle;
+        return Expanded(child: GestureDetector(behavior: HitTestBehavior.opaque, onTap: () => tap(i), child: Column(mainAxisSize: MainAxisSize.min, mainAxisAlignment: MainAxisAlignment.center, children: [
+          AnimatedScale(scale: on ? 1.12 : 1, duration: const Duration(milliseconds: 300), curve: Curves.easeOutBack, child: Icon(items[i].icon, color: col)),
+          if (style != 'icons' && (style != 'selected' || on)) Padding(padding: const EdgeInsets.only(top: 3), child: Text(items[i].label, style: TextStyle(color: col, fontSize: 11, fontWeight: on ? FontWeight.w700 : FontWeight.w500))),
+        ])));
+      }
 
-    switch (design) {
-      case 'floating':
-      case 'glass':
-        final glass = design == 'glass';
-        // The page runs behind the bar, so the shadow and rounded corners are visible.
-        final row = Container(
-          height: 66,
-          decoration: BoxDecoration(
-            color: glass ? bg.withOpacity(.62) : bg,
-            borderRadius: BorderRadius.circular(28),
-            border: Border.all(color: glass ? Colors.white.withOpacity(.7) : Colors.black.withOpacity(.05)),
-          ),
-          child: Row(children: [for (var i = 0; i < items.length; i++) btn(i)]),
-        );
-        return SafeArea(
-          child: Container(
-            margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(28),
-              boxShadow: const [BoxShadow(color: Color(0x40000000), blurRadius: 28, offset: Offset(0, 12))],
-            ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(28),
-              child: glass ? BackdropFilter(filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18), child: row) : row,
-            ),
-          ),
-        );
-      case 'bubble':
-        return Container(
-          color: bg,
-          child: SafeArea(child: SizedBox(height: 64, child: Row(children: [for (var i = 0; i < items.length; i++) btn(i, bubble: true)]))),
-        );
-      case 'minimal':
-        return Container(color: bg, child: SafeArea(child: SizedBox(height: 60, child: Row(children: [for (var i = 0; i < items.length; i++) btn(i, dot: true)]))));
-      case 'notch':
-        final mid = items.length ~/ 2;
-        return BottomAppBar(
-          color: bg,
-          shape: const CircularNotchedRectangle(),
-          notchMargin: 8,
-          height: 64,
-          padding: EdgeInsets.zero,
-          // Centre gap for the round button, the other items split evenly on both sides.
-          child: Row(children: [
-            Expanded(child: Row(children: [for (var i = 0; i < mid; i++) btn(i)])),
-            const SizedBox(width: 76),
-            Expanded(child: Row(children: [for (var i = mid + 1; i < items.length; i++) btn(i)])),
-          ]),
-        );
-      default:
-        return NavigationBarTheme(
-          data: NavigationBarThemeData(
-            labelTextStyle: WidgetStateProperty.resolveWith((st) => TextStyle(fontSize: 12, fontWeight: st.contains(WidgetState.selected) ? FontWeight.w700 : FontWeight.w500, color: st.contains(WidgetState.selected) ? active : idle)),
-            iconTheme: WidgetStateProperty.resolveWith((st) => IconThemeData(color: st.contains(WidgetState.selected) ? active : idle)),
-          ),
-          child: NavigationBar(
-          selectedIndex: sel,
-          labelBehavior: style == 'icons'
-              ? NavigationDestinationLabelBehavior.alwaysHide
-              : (style == 'selected' ? NavigationDestinationLabelBehavior.onlyShowSelected : NavigationDestinationLabelBehavior.alwaysShow),
-          backgroundColor: bg,
-          indicatorColor: active.withOpacity(.15),
-          onDestinationSelected: tap,
-          destinations: [for (final it in items) NavigationDestination(icon: Icon(it.icon), selectedIcon: Icon(it.icon, color: active), label: it.label)],
-        ));
+      bar = BottomAppBar(
+        color: bg,
+        shape: const CircularNotchedRectangle(),
+        notchMargin: 8,
+        height: 66,
+        padding: EdgeInsets.zero,
+        elevation: 12,
+        child: Row(children: [
+          Expanded(child: Row(children: [for (var i = 0; i < mid; i++) btn(i)])),
+          const SizedBox(width: 76),
+          Expanded(child: Row(children: [for (var i = mid + 1; i < items.length; i++) btn(i)])),
+        ]),
+      );
+    } else {
+      bar = LFBottomBar(
+        items: [for (final it in items) BarItem(it.icon, it.label)],
+        selected: sel,
+        onTap: tap,
+        design: design,
+        bg: bg,
+        active: active,
+        labels: style,
+      );
     }
+    // Hide while scrolling down (optional).
+    final hide = _barsHidden && bn['hide_on_scroll'] == true;
+    return AnimatedSlide(offset: hide ? const Offset(0, 1.4) : Offset.zero, duration: const Duration(milliseconds: 280), curve: Curves.easeOutCubic, child: bar);
   }
 
   @override
@@ -1072,8 +1044,7 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
       final ink = c.pageBg.computeLuminance() > .5 ? const Color(0xFF0F172A) : Colors.white;
       return Scaffold(
         backgroundColor: c.pageBg,
-        appBar: _appBar(),
-        body: Center(
+        body: Column(children: [if (_header() != null) _header()!, Expanded(child: Center(
           child: Padding(
             padding: const EdgeInsets.all(32),
             child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -1084,27 +1055,28 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
               Text('${eng['maintenance_text'] ?? ''}', textAlign: TextAlign.center, style: TextStyle(color: ink.withOpacity(.7))),
             ]),
           ),
-        ),
+        ))]),
       );
     }
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: _onBack,
       child: Scaffold(
+        key: _sk,
         backgroundColor: c.pageBg,
-        appBar: _appBar(),
         drawer: _drawer(),
         body: SafeArea(
           top: c.m('header')['enabled'] == false,
           bottom: !_floatingBar,
           child: Column(children: [
+            if (_header() != null) MediaQuery.removePadding(context: context, removeTop: false, child: _header()!),
             if (_banner != null && c.v('ads', 'banner_position') == 'top') SizedBox(height: _banner!.size.height.toDouble(), width: double.infinity, child: AdWidget(ad: _banner!)),
             Expanded(
               child: Stack(children: [
                 WebViewWidget(controller: _web),
                 if (loading && loader['style'] == 'bar') LinearProgressIndicator(value: _progress / 100, color: lc, backgroundColor: Colors.transparent, minHeight: 3),
-                if (loading && loader['style'] == 'spinner') Center(child: CircularProgressIndicator(color: lc)),
                 if (loading && loader['style'] == 'dots') Center(child: _Dots(color: lc)),
+                if (loading && lfLoader('${loader['style']}', lc) != null) Center(child: lfLoader('${loader['style']}', lc)),
                 if (_offline) _OfflineView(color: c.primary, title: '${off['title'] ?? 'No internet connection'}', text: '${off['text'] ?? ''}', onRetry: () => _web.reload()),
               ]),
             ),
