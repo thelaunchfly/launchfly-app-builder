@@ -607,10 +607,11 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
 
   Future<void> _openInbox() async {
     final prefs = await SharedPreferences.getInstance();
+    final was = _unread;
     await prefs.setInt('note_unread', 0);
     setState(() => _unread = 0);
     if (!mounted) return;
-    final url = await Navigator.push<String>(context, MaterialPageRoute(builder: (_) => InboxView(cfg: c)));
+    final url = await Navigator.push<String>(context, MaterialPageRoute(builder: (_) => InboxView(cfg: c, unread: was)));
     if (url != null && url.isNotEmpty) open(url);
   }
 
@@ -1469,14 +1470,16 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
 
 /// The notification inbox (bell icon in the header).
 class InboxView extends StatefulWidget {
-  const InboxView({super.key, required this.cfg});
+  const InboxView({super.key, required this.cfg, this.unread = 0});
   final Cfg cfg;
+  final int unread;
   @override
   State<InboxView> createState() => _InboxViewState();
 }
 
 class _InboxViewState extends State<InboxView> {
   List<Map> items = [];
+  int _unreadAtOpen = 0;
 
   @override
   void initState() {
@@ -1486,6 +1489,7 @@ class _InboxViewState extends State<InboxView> {
 
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
+    _unreadAtOpen = widget.unread;
     setState(() => items = ((jsonDecode(prefs.getString('note_inbox') ?? '[]') as List).cast<Map>()));
   }
 
@@ -1502,97 +1506,137 @@ class _InboxViewState extends State<InboxView> {
     final c = widget.cfg;
     final h = c.m('header');
     final bg = hexColor(h['bg'], c.primary);
-    final bg2 = '${h['bg2'] ?? ''}'.isNotEmpty ? hexColor(h['bg2'], bg) : Color.lerp(bg, Colors.black, .35)!;
-    final fg = hexColor(h['fg'], Colors.white);
+    final bg2 = '${h['bg2'] ?? ''}'.isNotEmpty ? hexColor(h['bg2'], bg) : Color.lerp(bg, const Color(0xFF7C3AED), .35)!;
     final dark = Theme.of(context).brightness == Brightness.dark;
-    final card = dark ? const Color(0xFF1E293B) : Colors.white;
+    final page = dark ? const Color(0xFF0B1120) : const Color(0xFFF5F7FB);
+    final card = dark ? const Color(0xFF151E31) : Colors.white;
     final ink = dark ? Colors.white : const Color(0xFF0F172A);
-    final accent = bg.computeLuminance() < .05 && dark ? Colors.white : bg;
+    final sub = ink.withOpacity(.55);
+    final accent = bg.computeLuminance() < .05 ? (dark ? Colors.white : const Color(0xFF0F172A)) : bg;
+    final top = MediaQuery.of(context).padding.top;
+    final now = DateTime.now();
+    // Group by Today / Yesterday / Earlier
+    String group(Map it) {
+      final at = it['at'] is num ? DateTime.fromMillisecondsSinceEpoch((it['at'] as num).toInt() * 1000) : now;
+      final d = DateTime(now.year, now.month, now.day).difference(DateTime(at.year, at.month, at.day)).inDays;
+      return d <= 0 ? 'Today' : (d == 1 ? 'Yesterday' : 'Earlier');
+    }
+    final rows = <Widget>[];
+    String? last;
+    for (var i = 0; i < items.length; i++) {
+      final it = items[i];
+      final g = group(it);
+      if (g != last) {
+        last = g;
+        rows.add(Padding(padding: EdgeInsets.fromLTRB(6, rows.isEmpty ? 4 : 18, 6, 10), child: Text(g.toUpperCase(), style: TextStyle(color: sub, fontSize: 12, fontWeight: FontWeight.w800, letterSpacing: 1.2))));
+      }
+      final img = '${it['image'] ?? ''}';
+      final url = '${it['url'] ?? ''}';
+      final fresh = i < _unreadAtOpen;
+      rows.add(TweenAnimationBuilder<double>(
+        tween: Tween(begin: 0, end: 1),
+        duration: Duration(milliseconds: 320 + i * 60),
+        curve: Curves.easeOutCubic,
+        builder: (_, t, ch) => Opacity(opacity: t, child: Transform.translate(offset: Offset(0, 16 * (1 - t)), child: ch)),
+        child: Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: Material(
+            color: card,
+            borderRadius: BorderRadius.circular(22),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(22),
+              onTap: url.isEmpty ? null : () => Navigator.pop(context, url),
+              child: Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(borderRadius: BorderRadius.circular(22), border: Border.all(color: fresh ? accent.withOpacity(.35) : ink.withOpacity(.05))),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Stack(clipBehavior: Clip.none, children: [
+                      Container(width: 46, height: 46, decoration: BoxDecoration(color: accent.withOpacity(.1), borderRadius: BorderRadius.circular(15)), child: Center(child: AppLogo(url: c.iconUrl, size: 30, radius: 9))),
+                      if (fresh) Positioned(right: -2, top: -2, child: Container(width: 12, height: 12, decoration: BoxDecoration(color: const Color(0xFFEF4444), shape: BoxShape.circle, border: Border.all(color: card, width: 2)))),
+                    ]),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Row(children: [
+                          Expanded(child: Text('${it['title']}', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: ink, fontWeight: FontWeight.w800, fontSize: 15.5))),
+                          const SizedBox(width: 8),
+                          Text(_ago(it['at'] as num?), style: TextStyle(fontSize: 12, color: sub)),
+                        ]),
+                        const SizedBox(height: 4),
+                        Text('${it['body']}', style: TextStyle(color: ink.withOpacity(.7), height: 1.45, fontSize: 14)),
+                      ]),
+                    ),
+                  ]),
+                  if (img.isNotEmpty)
+                    Padding(padding: const EdgeInsets.only(top: 12), child: ClipRRect(borderRadius: BorderRadius.circular(16), child: AspectRatio(aspectRatio: 16 / 9, child: Image.network(img, fit: BoxFit.cover, errorBuilder: (_, __, ___) => const SizedBox())))),
+                  if (url.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 12, left: 58),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                        decoration: BoxDecoration(color: accent.withOpacity(.1), borderRadius: BorderRadius.circular(20)),
+                        child: Row(mainAxisSize: MainAxisSize.min, children: [Text(tr('Open'), style: TextStyle(color: accent, fontWeight: FontWeight.w700, fontSize: 13)), const SizedBox(width: 4), Icon(LucideIcons.arrowRight, size: 15, color: accent)]),
+                      ),
+                    ),
+                ]),
+              ),
+            ),
+          ),
+        ),
+      ));
+    }
     return Scaffold(
-      backgroundColor: dark ? const Color(0xFF0F172A) : const Color(0xFFF4F6FA),
+      backgroundColor: page,
       body: Column(children: [
         Container(
-          padding: EdgeInsets.fromLTRB(8, MediaQuery.of(context).padding.top + 6, 16, 22),
-          decoration: BoxDecoration(gradient: LinearGradient(colors: [bg, bg2], begin: Alignment.topLeft, end: Alignment.bottomRight), borderRadius: const BorderRadius.vertical(bottom: Radius.circular(28))),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            IconButton(icon: Icon(outlineIcons ? LucideIcons.arrowLeft : Icons.arrow_back_rounded, color: fg), onPressed: () => Navigator.pop(context)),
-            Padding(
-              padding: const EdgeInsets.only(left: 10),
-              child: Row(children: [
-                Expanded(child: Text(tr('Notifications'), style: TextStyle(color: fg, fontSize: 28, fontWeight: FontWeight.w800, letterSpacing: -.6))),
-                if (items.isNotEmpty)
-                  Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5), decoration: BoxDecoration(color: Colors.white.withOpacity(.2), borderRadius: BorderRadius.circular(20)), child: Text('${items.length}', style: TextStyle(color: fg, fontWeight: FontWeight.w700))),
-              ]),
-            ),
-            Padding(padding: const EdgeInsets.only(left: 10, top: 2), child: Text('News and offers from ${c.name}', style: TextStyle(color: fg.withOpacity(.75)))),
+          padding: EdgeInsets.fromLTRB(10, top + 6, 18, 24),
+          decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [bg, bg2]), borderRadius: const BorderRadius.vertical(bottom: Radius.circular(32))),
+          child: Stack(children: [
+            Positioned(right: -40, top: -30, child: Container(width: 150, height: 150, decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: Colors.white.withOpacity(.12), width: 22)))),
+            Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Material(color: Colors.white.withOpacity(.18), shape: const CircleBorder(), child: IconButton(icon: Icon(outlineIcons ? LucideIcons.arrowLeft : Icons.arrow_back_rounded, color: Colors.white), onPressed: () => Navigator.pop(context))),
+              const SizedBox(height: 14),
+              Padding(
+                padding: const EdgeInsets.only(left: 8),
+                child: Row(children: [
+                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(tr('Notifications'), style: const TextStyle(color: Colors.white, fontSize: 30, fontWeight: FontWeight.w800, letterSpacing: -.8)),
+                    const SizedBox(height: 2),
+                    Text('News and offers from ${c.name}', style: TextStyle(color: Colors.white.withOpacity(.8))),
+                  ])),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                    decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [Icon(LucideIcons.bell, size: 15, color: accent), const SizedBox(width: 6), Text('${items.length}', style: TextStyle(color: accent, fontWeight: FontWeight.w800))]),
+                  ),
+                ]),
+              ),
+            ]),
           ]),
         ),
         Expanded(
           child: items.isEmpty
               ? Center(
                   child: Column(mainAxisSize: MainAxisSize.min, children: [
-                    Container(width: 96, height: 96, decoration: BoxDecoration(color: accent.withOpacity(.1), shape: BoxShape.circle), child: Icon(LucideIcons.bellOff, size: 40, color: accent)),
-                    const SizedBox(height: 16),
-                    Text(tr('No notifications yet'), style: TextStyle(color: ink, fontSize: 18, fontWeight: FontWeight.w800)),
+                    Stack(alignment: Alignment.center, children: [
+                      Container(width: 140, height: 140, decoration: BoxDecoration(color: accent.withOpacity(.06), shape: BoxShape.circle)),
+                      Container(width: 96, height: 96, decoration: BoxDecoration(color: accent.withOpacity(.12), shape: BoxShape.circle)),
+                      Icon(LucideIcons.bellRing, size: 40, color: accent),
+                    ]),
+                    const SizedBox(height: 18),
+                    Text(tr('No notifications yet'), style: TextStyle(color: ink, fontSize: 19, fontWeight: FontWeight.w800)),
                     const SizedBox(height: 6),
-                    Text('We\'ll let you know when something new arrives.', style: TextStyle(color: ink.withOpacity(.55))),
+                    Text("We'll let you know when something new arrives.", style: TextStyle(color: sub)),
                   ]),
                 )
               : RefreshIndicator(
+                  color: accent,
                   onRefresh: () async {
                     await checkInbox(Map<String, dynamic>.from(c.raw), show: false);
                     await _load();
                   },
-                  child: ListView.separated(
-                    padding: const EdgeInsets.fromLTRB(16, 18, 16, 24),
-                    itemCount: items.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 12),
-                    itemBuilder: (_, i) {
-                      final it = items[i];
-                      final img = '${it['image'] ?? ''}';
-                      final url = '${it['url'] ?? ''}';
-                      return TweenAnimationBuilder<double>(
-                        tween: Tween(begin: 0, end: 1),
-                        duration: Duration(milliseconds: 300 + i * 60),
-                        curve: Curves.easeOutCubic,
-                        builder: (_, t, ch) => Opacity(opacity: t, child: Transform.translate(offset: Offset(0, 16 * (1 - t)), child: ch)),
-                        child: Material(
-                          color: card,
-                          borderRadius: BorderRadius.circular(20),
-                          child: InkWell(
-                            borderRadius: BorderRadius.circular(20),
-                            onTap: url.isEmpty ? null : () => Navigator.pop(context, url),
-                            child: Padding(
-                              padding: const EdgeInsets.all(14),
-                              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                                Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                                  Container(width: 44, height: 44, decoration: BoxDecoration(gradient: LinearGradient(colors: [bg, bg2]), borderRadius: BorderRadius.circular(14)), child: Icon(LucideIcons.bell, color: fg, size: 20)),
-                                  const SizedBox(width: 12),
-                                  Expanded(
-                                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                                      Row(children: [
-                                        Expanded(child: Text('${it['title']}', style: TextStyle(color: ink, fontWeight: FontWeight.w800, fontSize: 15.5))),
-                                        Text(_ago(it['at'] as num?), style: TextStyle(fontSize: 12, color: ink.withOpacity(.45))),
-                                      ]),
-                                      const SizedBox(height: 4),
-                                      Text('${it['body']}', style: TextStyle(color: ink.withOpacity(.7), height: 1.4)),
-                                    ]),
-                                  ),
-                                ]),
-                                if (img.isNotEmpty)
-                                  Padding(padding: const EdgeInsets.only(top: 12), child: ClipRRect(borderRadius: BorderRadius.circular(14), child: Image.network(img, fit: BoxFit.cover, errorBuilder: (_, __, ___) => const SizedBox()))),
-                                if (url.isNotEmpty)
-                                  Padding(
-                                    padding: const EdgeInsets.only(top: 10, left: 56),
-                                    child: Row(children: [Text(tr('Open'), style: TextStyle(color: accent, fontWeight: FontWeight.w700)), const SizedBox(width: 4), Icon(LucideIcons.arrowRight, size: 16, color: accent)]),
-                                  ),
-                              ]),
-                            ),
-                          ),
-                        ),
-                      );
-                    },
-                  ),
+                  child: ListView(padding: const EdgeInsets.fromLTRB(16, 20, 16, 30), children: rows),
                 ),
         ),
       ]),
@@ -1644,137 +1688,175 @@ class AboutView extends StatelessWidget {
   Widget build(BuildContext context) {
     final a = cfg.m('about');
     String v(String k) => '${a[k] ?? ''}'.trim();
-    // (icon, label, link, brand colour)
-    final qrLink = '${cfg.v('share', 'qr', false) == true ? 'https://play.google.com/store/apps/details?id=${cfg.raw['package_id'] ?? ''}' : ''}';
-    final quick = <(IconData, String, String, Color)>[
-      if (v('map_url').isNotEmpty) (LucideIcons.mapPin, tr('Find us'), v('map_url'), const Color(0xFFDC2626)),
-      if (v('phone').isNotEmpty) (LucideIcons.phone, tr('Call'), 'tel:${v('phone')}', const Color(0xFF2563EB)),
-      if (v('whatsapp').isNotEmpty) (LucideIcons.messageCircle, 'WhatsApp', 'https://wa.me/${v('whatsapp').replaceAll(RegExp(r'\D'), '')}', const Color(0xFF16A34A)),
-      if (v('email').isNotEmpty) (LucideIcons.mail, tr('Email'), 'mailto:${v('email')}', const Color(0xFFEA580C)),
-      if (v('website').isNotEmpty) (LucideIcons.globe, 'Website', v('website'), const Color(0xFF7C3AED)),
-    ];
-    final social = <(IconData, String, String, Color)>[
-      (LucideIcons.facebook, 'Facebook', v('facebook'), const Color(0xFF1877F2)),
-      (LucideIcons.instagram, 'Instagram', v('instagram'), const Color(0xFFE1306C)),
-      (LucideIcons.twitter, 'X / Twitter', v('twitter'), const Color(0xFF0F172A)),
-      (LucideIcons.youtube, 'YouTube', v('youtube'), const Color(0xFFFF0000)),
-      (LucideIcons.music2, 'TikTok', v('tiktok'), const Color(0xFF111111)),
-      (LucideIcons.ghost, 'Snapchat', v('snapchat'), const Color(0xFFF7C600)),
-      (LucideIcons.messagesSquare, 'Messenger', v('messenger'), const Color(0xFF0084FF)),
-      (LucideIcons.video, 'Skype', v('skype').isNotEmpty ? 'skype:${v('skype')}?chat' : '', const Color(0xFF00AFF0)),
-    ].where((l) => l.$3.isNotEmpty).toList();
     final h = cfg.m('header');
     final bg = hexColor(h['bg'], cfg.primary);
-    final bg2 = '${h['bg2'] ?? ''}'.isNotEmpty ? hexColor(h['bg2'], bg) : Color.lerp(bg, Colors.black, .35)!;
-    final fg = hexColor(h['fg'], Colors.white);
+    final bg2 = '${h['bg2'] ?? ''}'.isNotEmpty ? hexColor(h['bg2'], bg) : Color.lerp(bg, const Color(0xFF7C3AED), .35)!;
     final dark = Theme.of(context).brightness == Brightness.dark;
-    final card = dark ? const Color(0xFF1E293B) : Colors.white;
+    final page = dark ? const Color(0xFF0B1120) : const Color(0xFFF5F7FB);
+    final card = dark ? const Color(0xFF151E31) : Colors.white;
     final ink = dark ? Colors.white : const Color(0xFF0F172A);
+    final sub = ink.withOpacity(.55);
     void go(String url) => launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+    // (icon, title, detail, link, colour)
+    final contact = <(IconData, String, String, String, Color)>[
+      if (v('phone').isNotEmpty) (LucideIcons.phone, tr('Call'), v('phone'), 'tel:${v('phone')}', const Color(0xFF2563EB)),
+      if (v('whatsapp').isNotEmpty) (LucideIcons.messageCircle, 'WhatsApp', v('whatsapp'), 'https://wa.me/${v('whatsapp').replaceAll(RegExp(r'\D'), '')}', const Color(0xFF16A34A)),
+      if (v('email').isNotEmpty) (LucideIcons.mail, tr('Email'), v('email'), 'mailto:${v('email')}', const Color(0xFFEA580C)),
+      if (v('website').isNotEmpty) (LucideIcons.globe, 'Website', v('website').replaceFirst(RegExp(r'^https?://'), ''), v('website'), const Color(0xFF7C3AED)),
+      if (v('map_url').isNotEmpty) (LucideIcons.mapPin, tr('Find us'), 'Open in Maps', v('map_url'), const Color(0xFFDC2626)),
+      if (v('skype').isNotEmpty) (LucideIcons.video, 'Skype', v('skype'), 'skype:${v('skype')}?chat', const Color(0xFF00AFF0)),
+    ];
+    final social = <(IconData, String, Color)>[
+      (LucideIcons.facebook, v('facebook'), const Color(0xFF1877F2)),
+      (LucideIcons.instagram, v('instagram'), const Color(0xFFE1306C)),
+      (LucideIcons.twitter, v('twitter'), const Color(0xFF0F172A)),
+      (LucideIcons.youtube, v('youtube'), const Color(0xFFFF0000)),
+      (LucideIcons.music2, v('tiktok'), const Color(0xFF111111)),
+      (LucideIcons.ghost, v('snapchat'), const Color(0xFFF2B600)),
+      (LucideIcons.messagesSquare, v('messenger'), const Color(0xFF0084FF)),
+    ].where((l) => l.$2.isNotEmpty).toList();
+    final qrLink = cfg.v('share', 'qr', false) == true ? 'https://play.google.com/store/apps/details?id=${cfg.raw['package_id'] ?? ''}' : '';
+    final top = MediaQuery.of(context).padding.top;
+
+    Widget section(String t) => Padding(padding: const EdgeInsets.fromLTRB(24, 26, 24, 10), child: Text(t.toUpperCase(), style: TextStyle(color: sub, fontSize: 12, fontWeight: FontWeight.w800, letterSpacing: 1.2)));
+    Widget fadeIn(int i, Widget w) => TweenAnimationBuilder<double>(
+          tween: Tween(begin: 0, end: 1),
+          duration: Duration(milliseconds: 350 + i * 70),
+          curve: Curves.easeOutCubic,
+          builder: (_, t, c) => Opacity(opacity: t, child: Transform.translate(offset: Offset(0, 18 * (1 - t)), child: c)),
+          child: w,
+        );
+
     return Scaffold(
-      backgroundColor: dark ? const Color(0xFF0F172A) : const Color(0xFFF4F6FA),
+      backgroundColor: page,
       body: CustomScrollView(slivers: [
         SliverToBoxAdapter(
-          child: Stack(clipBehavior: Clip.none, children: [
+          child: Stack(children: [
             Container(
-              height: MediaQuery.of(context).padding.top + 190,
-              decoration: BoxDecoration(gradient: LinearGradient(colors: [bg, bg2], begin: Alignment.topLeft, end: Alignment.bottomRight)),
+              height: top + 230,
+              decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [bg, bg2])),
               child: Stack(children: [
-                Positioned(right: -60, top: -40, child: Container(width: 220, height: 220, decoration: BoxDecoration(shape: BoxShape.circle, color: Colors.white.withOpacity(.08)))),
-                Positioned(left: -30, bottom: -70, child: Container(width: 160, height: 160, decoration: BoxDecoration(shape: BoxShape.circle, color: Colors.white.withOpacity(.06)))),
-                Positioned(
-                  left: 8,
-                  top: MediaQuery.of(context).padding.top + 6,
-                  child: IconButton(icon: Icon(outlineIcons ? LucideIcons.arrowLeft : Icons.arrow_back_rounded, color: fg), onPressed: () => Navigator.pop(context)),
-                ),
-                Positioned(left: 0, right: 0, top: MediaQuery.of(context).padding.top + 16, child: Text(tr('About'), textAlign: TextAlign.center, style: TextStyle(color: fg, fontSize: 17, fontWeight: FontWeight.w700))),
+                Positioned(right: -70, top: -50, child: Container(width: 240, height: 240, decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: Colors.white.withOpacity(.12), width: 30)))),
+                Positioned(left: -40, bottom: -60, child: Container(width: 170, height: 170, decoration: BoxDecoration(shape: BoxShape.circle, color: Colors.white.withOpacity(.07)))),
               ]),
             ),
+            Positioned(
+              left: 10,
+              top: top + 6,
+              child: Material(
+                color: Colors.white.withOpacity(.18),
+                shape: const CircleBorder(),
+                child: IconButton(icon: Icon(outlineIcons ? LucideIcons.arrowLeft : Icons.arrow_back_rounded, color: Colors.white), onPressed: () => Navigator.pop(context)),
+              ),
+            ),
             Padding(
-              padding: EdgeInsets.fromLTRB(16, MediaQuery.of(context).padding.top + 110, 16, 0),
-              child: Container(
-                padding: const EdgeInsets.fromLTRB(20, 0, 20, 22),
-                decoration: BoxDecoration(color: card, borderRadius: BorderRadius.circular(28), boxShadow: const [BoxShadow(color: Color(0x1A000000), blurRadius: 30, offset: Offset(0, 12))]),
+              padding: EdgeInsets.fromLTRB(18, top + 120, 18, 0),
+              child: fadeIn(0, Container(
+                padding: const EdgeInsets.fromLTRB(22, 0, 22, 24),
+                decoration: BoxDecoration(color: card, borderRadius: BorderRadius.circular(30), boxShadow: [BoxShadow(color: bg.withOpacity(.18), blurRadius: 40, offset: const Offset(0, 18))]),
                 child: Column(children: [
                   Transform.translate(
-                    offset: const Offset(0, -42),
-                    child: Container(padding: const EdgeInsets.all(5), decoration: BoxDecoration(color: card, borderRadius: BorderRadius.circular(30)), child: AppLogo(url: cfg.iconUrl, size: 88, radius: 24)),
+                    offset: const Offset(0, -46),
+                    child: Container(
+                      padding: const EdgeInsets.all(6),
+                      decoration: BoxDecoration(color: card, borderRadius: BorderRadius.circular(32), boxShadow: const [BoxShadow(color: Color(0x22000000), blurRadius: 20, offset: Offset(0, 8))]),
+                      child: AppLogo(url: cfg.iconUrl, size: 92, radius: 26),
+                    ),
                   ),
                   Transform.translate(
-                    offset: const Offset(0, -28),
+                    offset: const Offset(0, -30),
                     child: Column(children: [
-                      Text(cfg.name, textAlign: TextAlign.center, style: TextStyle(color: ink, fontSize: 24, fontWeight: FontWeight.w800, letterSpacing: -.4)),
-                      if (v('text').isNotEmpty) Padding(padding: const EdgeInsets.only(top: 8), child: Text(v('text'), textAlign: TextAlign.center, style: TextStyle(color: ink.withOpacity(.65), fontSize: 15, height: 1.5))),
+                      Text(cfg.name, textAlign: TextAlign.center, style: TextStyle(color: ink, fontSize: 26, fontWeight: FontWeight.w800, letterSpacing: -.6)),
+                      const SizedBox(height: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                        decoration: BoxDecoration(color: const Color(0xFF16A34A).withOpacity(.12), borderRadius: BorderRadius.circular(20)),
+                        child: const Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.verified_rounded, color: Color(0xFF16A34A), size: 15), SizedBox(width: 5), Text('Official app', style: TextStyle(color: Color(0xFF16A34A), fontWeight: FontWeight.w700, fontSize: 12.5))]),
+                      ),
+                      if (v('text').isNotEmpty) Padding(padding: const EdgeInsets.only(top: 14), child: Text(v('text'), textAlign: TextAlign.center, style: TextStyle(color: sub, fontSize: 15, height: 1.6))),
                     ]),
                   ),
-                  if (quick.isNotEmpty)
-                    Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
-                      for (final q in quick)
-                        GestureDetector(
-                          onTap: () => go(q.$3),
-                          child: Column(children: [
-                            Container(width: 54, height: 54, decoration: BoxDecoration(color: q.$4.withOpacity(.12), borderRadius: BorderRadius.circular(18)), child: Icon(q.$1, color: q.$4, size: 23)),
-                            const SizedBox(height: 6),
-                            Text(q.$2, style: TextStyle(color: ink.withOpacity(.75), fontSize: 12.5, fontWeight: FontWeight.w600)),
-                          ]),
+                  if (contact.isNotEmpty)
+                    Row(children: [
+                      for (final q in contact.take(4))
+                        Expanded(
+                          child: GestureDetector(
+                            onTap: () => go(q.$4),
+                            child: Column(children: [
+                              Container(width: 52, height: 52, decoration: BoxDecoration(gradient: LinearGradient(colors: [q.$5, Color.lerp(q.$5, Colors.black, .2)!]), borderRadius: BorderRadius.circular(17), boxShadow: [BoxShadow(color: q.$5.withOpacity(.35), blurRadius: 12, offset: const Offset(0, 6))]), child: Icon(q.$1, color: Colors.white, size: 22)),
+                              const SizedBox(height: 7),
+                              Text(q.$2, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: ink, fontSize: 12.5, fontWeight: FontWeight.w600)),
+                            ]),
+                          ),
                         ),
                     ]),
                 ]),
-              ),
+              )),
             ),
           ]),
         ),
-        if (qrLink.isNotEmpty)
+        if (contact.isNotEmpty) ...[
+          SliverToBoxAdapter(child: section('Contact')),
           SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 22, 16, 0),
-              child: Container(
-                padding: const EdgeInsets.all(18),
-                decoration: BoxDecoration(color: card, borderRadius: BorderRadius.circular(22)),
-                child: Row(children: [
-                  ClipRRect(borderRadius: BorderRadius.circular(12), child: Image.network('https://api.qrserver.com/v1/create-qr-code/?size=240x240&margin=8&data=${Uri.encodeComponent(qrLink)}', width: 110, height: 110, errorBuilder: (_, __, ___) => const SizedBox(width: 110))),
-                  const SizedBox(width: 16),
-                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(tr('Share app'), style: TextStyle(color: ink, fontSize: 17, fontWeight: FontWeight.w800)),
-                    const SizedBox(height: 4),
-                    Text('Scan to download ${cfg.name}', style: TextStyle(color: ink.withOpacity(.6))),
-                  ])),
-                ]),
-              ),
-            ),
-          ),
-        if (social.isNotEmpty) ...[
-          SliverToBoxAdapter(child: Padding(padding: const EdgeInsets.fromLTRB(22, 26, 22, 10), child: Text(tr('Follow us'), style: TextStyle(color: ink, fontSize: 17, fontWeight: FontWeight.w800)))),
-          SliverPadding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 30),
-            sliver: SliverGrid.count(
-              crossAxisCount: 2,
-              mainAxisSpacing: 12,
-              crossAxisSpacing: 12,
-              childAspectRatio: 2.6,
-              children: [
-                for (final l in social)
-                  Material(
-                    color: card,
-                    borderRadius: BorderRadius.circular(18),
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(18),
-                      onTap: () => go(l.$3),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 12),
-                        child: Row(children: [
-                          Container(width: 38, height: 38, decoration: BoxDecoration(color: l.$4, borderRadius: BorderRadius.circular(12)), child: Icon(l.$1, color: Colors.white, size: 19)),
-                          const SizedBox(width: 10),
-                          Expanded(child: Text(l.$2, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: ink, fontWeight: FontWeight.w600))),
-                        ]),
-                      ),
+            child: fadeIn(1, Container(
+              margin: const EdgeInsets.symmetric(horizontal: 18),
+              decoration: BoxDecoration(color: card, borderRadius: BorderRadius.circular(24)),
+              child: Column(children: [
+                for (var i = 0; i < contact.length; i++)
+                  InkWell(
+                    borderRadius: BorderRadius.circular(24),
+                    onTap: () => go(contact[i].$4),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                      decoration: BoxDecoration(border: i == contact.length - 1 ? null : Border(bottom: BorderSide(color: ink.withOpacity(.06)))),
+                      child: Row(children: [
+                        Container(width: 42, height: 42, decoration: BoxDecoration(color: contact[i].$5.withOpacity(.12), borderRadius: BorderRadius.circular(13)), child: Icon(contact[i].$1, color: contact[i].$5, size: 20)),
+                        const SizedBox(width: 14),
+                        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Text(contact[i].$2, style: TextStyle(color: ink, fontSize: 15, fontWeight: FontWeight.w700)),
+                          Text(contact[i].$3, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: sub, fontSize: 13)),
+                        ])),
+                        Container(width: 30, height: 30, decoration: BoxDecoration(color: ink.withOpacity(.05), shape: BoxShape.circle), child: Icon(LucideIcons.arrowUpRight, size: 16, color: ink.withOpacity(.6))),
+                      ]),
                     ),
                   ),
-              ],
-            ),
+              ]),
+            )),
           ),
-        ] else
-          const SliverToBoxAdapter(child: SizedBox(height: 30)),
+        ],
+        if (social.isNotEmpty) ...[
+          SliverToBoxAdapter(child: section(tr('Follow us'))),
+          SliverToBoxAdapter(
+            child: fadeIn(2, Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 18),
+              child: Wrap(spacing: 12, runSpacing: 12, children: [
+                for (final l in social)
+                  GestureDetector(
+                    onTap: () => go(l.$2),
+                    child: Container(width: 58, height: 58, decoration: BoxDecoration(color: card, borderRadius: BorderRadius.circular(18), boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 12, offset: Offset(0, 4))]), child: Icon(l.$1, color: l.$3, size: 24)),
+                  ),
+              ]),
+            )),
+          ),
+        ],
+        if (qrLink.isNotEmpty)
+          SliverToBoxAdapter(
+            child: fadeIn(3, Container(
+              margin: const EdgeInsets.fromLTRB(18, 26, 18, 0),
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(gradient: LinearGradient(colors: [bg, bg2]), borderRadius: BorderRadius.circular(24)),
+              child: Row(children: [
+                Container(padding: const EdgeInsets.all(6), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16)), child: ClipRRect(borderRadius: BorderRadius.circular(10), child: Image.network('https://api.qrserver.com/v1/create-qr-code/?size=240x240&margin=4&data=${Uri.encodeComponent(qrLink)}', width: 96, height: 96, errorBuilder: (_, __, ___) => const SizedBox(width: 96, height: 96)))),
+                const SizedBox(width: 16),
+                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(tr('Share app'), style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800)),
+                  const SizedBox(height: 4),
+                  Text('Scan to download ${cfg.name}', style: TextStyle(color: Colors.white.withOpacity(.85))),
+                ])),
+              ]),
+            )),
+          ),
+        SliverToBoxAdapter(child: Padding(padding: const EdgeInsets.fromLTRB(20, 30, 20, 34), child: Text('${cfg.name} · Made with The LaunchFly', textAlign: TextAlign.center, style: TextStyle(color: sub.withOpacity(.6), fontSize: 12)))),
       ]),
     );
   }
