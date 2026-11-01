@@ -36,8 +36,10 @@ const _dur = Duration(milliseconds: 320);
 
 /// One bottom bar entry.
 class BarItem {
-  const BarItem(this.icon, this.label);
+  const BarItem(this.icon, this.label, [this.badge = '']);
   final String icon;
+  /// Small red label on the icon, e.g. "3" or "New".
+  final String badge;
   final String label;
 }
 
@@ -105,6 +107,9 @@ class LFBottomBar extends StatelessWidget {
         ]),
       );
 
+  Widget _bi(int i, {Color? color, double? size}) => Badge(isLabelVisible: items[i].badge.isNotEmpty, label: Text(items[i].badge), child: AppIco(items[i].icon, color: color, size: size));
+  Widget _ib(int i, Color c, bool on, {double size = 24}) => Badge(isLabelVisible: items[i].badge.isNotEmpty, label: Text(items[i].badge), child: _icon(items[i].icon, c, on, size: size));
+
   Widget _row(Widget Function(int i, bool on) build) => Row(children: [for (var i = 0; i < items.length; i++) _tap(i, build(i, i == selected))]);
 
   @override
@@ -123,7 +128,7 @@ class LFBottomBar extends StatelessWidget {
                 boxShadow: on ? [BoxShadow(color: active.withOpacity(.4), blurRadius: 12, offset: const Offset(0, 5))] : const [],
               ),
               child: Column(mainAxisSize: MainAxisSize.min, children: [
-                _icon(items[i].icon, on ? _onActive : idle, false),
+                _ib(i, on ? _onActive : idle, false),
                 if (_showLabel(on)) Padding(padding: const EdgeInsets.only(top: 3), child: _label(items[i].label, on ? _onActive : idle, on)),
               ]),
             )), height: 70);
@@ -136,7 +141,7 @@ class LFBottomBar extends StatelessWidget {
               padding: EdgeInsets.symmetric(horizontal: on ? 16 : 8, vertical: 10),
               decoration: BoxDecoration(color: on ? active : Colors.transparent, borderRadius: BorderRadius.circular(30)),
               child: Row(mainAxisSize: MainAxisSize.min, children: [
-                _icon(items[i].icon, on ? _onActive : idle, false, size: 22),
+                _ib(i, on ? _onActive : idle, false, size: 22),
                 AnimatedSize(
                   duration: _dur,
                   curve: _ease,
@@ -155,7 +160,7 @@ class LFBottomBar extends StatelessWidget {
               padding: EdgeInsets.symmetric(horizontal: on ? 14 : 8, vertical: 9),
               decoration: BoxDecoration(color: on ? active.withOpacity(.14) : Colors.transparent, borderRadius: BorderRadius.circular(30)),
               child: Row(mainAxisSize: MainAxisSize.min, children: [
-                _icon(items[i].icon, on ? active : idle, false, size: 22),
+                _ib(i, on ? active : idle, false, size: 22),
                 AnimatedSize(
                   duration: _dur,
                   curve: _ease,
@@ -168,7 +173,7 @@ class LFBottomBar extends StatelessWidget {
       case 'dot':
         return _flat(_row((i, on) => Column(mainAxisSize: MainAxisSize.min, children: [
               AnimatedContainer(duration: _dur, curve: _ease, width: on ? 7 : 0, height: 7, margin: const EdgeInsets.only(bottom: 5), decoration: BoxDecoration(color: active, shape: BoxShape.circle)),
-              _icon(items[i].icon, on ? active : idle, on, size: 25),
+              _ib(i, on ? active : idle, on, size: 25),
               AnimatedSize(duration: _dur, curve: _ease, child: on && labels != 'icons' ? Padding(padding: const EdgeInsets.only(top: 3), child: _label(items[i].label, active, true)) : const SizedBox(height: 0)),
             ])));
 
@@ -178,7 +183,7 @@ class LFBottomBar extends StatelessWidget {
           Positioned.fill(child: _row((i, on) => Padding(
                 padding: const EdgeInsets.only(bottom: 8),
                 child: Column(mainAxisSize: MainAxisSize.min, children: [
-                  _icon(items[i].icon, on ? active : idle, on),
+                  _ib(i, on ? active : idle, on),
                   if (_showLabel(on)) Padding(padding: const EdgeInsets.only(top: 3), child: _label(items[i].label, on ? active : idle, on)),
                 ]),
               ))),
@@ -201,7 +206,7 @@ class LFBottomBar extends StatelessWidget {
             ]);
           })),
           Positioned.fill(child: _row((i, on) => Column(mainAxisSize: MainAxisSize.min, children: [
-                _icon(items[i].icon, on ? active : idle, on),
+                _ib(i, on ? active : idle, on),
                 if (_showLabel(on)) Padding(padding: const EdgeInsets.only(top: 3), child: _label(items[i].label, on ? active : idle, on)),
               ]))),
           Positioned.fill(child: LayoutBuilder(builder: (_, box) {
@@ -226,7 +231,7 @@ class LFBottomBar extends StatelessWidget {
                   borderRadius: BorderRadius.circular(16),
                   boxShadow: on ? [BoxShadow(color: active.withOpacity(.45), blurRadius: 16, offset: const Offset(0, 8))] : const [],
                 ),
-                child: AppIco(items[i].icon, color: on ? _onActive : idle, size: 24),
+                child: _bi(i, color: on ? _onActive : idle, size: 24),
               ),
               if (labels != 'icons') Transform.translate(offset: Offset(0, on ? -8 : 0), child: _label(items[i].label, on ? active : idle, on)),
             ])), height: 74);
@@ -239,8 +244,8 @@ class LFBottomBar extends StatelessWidget {
               width: on ? 50 : 44,
               height: on ? 50 : 44,
               decoration: BoxDecoration(color: on ? Colors.white : Colors.transparent, shape: BoxShape.circle),
-              child: AppIco(items[i].icon, color: on ? const Color(0xFF0F172A) : Colors.white.withOpacity(.75), size: 23),
-            )), color: const Color(0xFF111418), radius: 36, height: 70);
+              child: _bi(i, color: on ? const Color(0xFF0F172A) : Colors.white.withOpacity(.75), size: 23),
+            )), color: bg.computeLuminance() > .9 ? const Color(0xFF111418) : bg, radius: 36, height: 70);
 
       // ---- Dock: floating bar with a raised bubble that slides to the selected item
       case 'dock':
@@ -256,7 +261,7 @@ class LFBottomBar extends StatelessWidget {
               height: 52,
               child: DecoratedBox(decoration: BoxDecoration(color: active, shape: BoxShape.circle, boxShadow: [BoxShadow(color: active.withOpacity(.45), blurRadius: 14, offset: const Offset(0, 6))])),
             ),
-            Positioned.fill(child: _row((i, on) => AppIco(items[i].icon, color: on ? _onActive : idle, size: 24))),
+            Positioned.fill(child: _row((i, on) => _bi(i, color: on ? _onActive : idle, size: 24))),
           ]);
         }), radius: 34, height: 66);
 
@@ -264,14 +269,14 @@ class LFBottomBar extends StatelessWidget {
       case 'floating':
       case 'glass':
         return _float(_row((i, on) => Column(mainAxisSize: MainAxisSize.min, children: [
-              _icon(items[i].icon, on ? active : idle, on),
+              _ib(i, on ? active : idle, on),
               if (_showLabel(on)) Padding(padding: const EdgeInsets.only(top: 3), child: _label(items[i].label, on ? active : idle, on)),
             ])), glass: design == 'glass');
 
       // ---- Minimal: icons only, a dot under the selected one
       case 'minimal':
         return _flat(_row((i, on) => Column(mainAxisSize: MainAxisSize.min, children: [
-              _icon(items[i].icon, on ? active : idle, on),
+              _ib(i, on ? active : idle, on),
               AnimatedContainer(duration: _dur, curve: _ease, margin: const EdgeInsets.only(top: 5), width: on ? 18 : 0, height: 4, decoration: BoxDecoration(color: active, borderRadius: BorderRadius.circular(4))),
             ])), border: false);
 
@@ -284,8 +289,8 @@ class LFBottomBar extends StatelessWidget {
               width: on ? 52 : 46,
               height: on ? 52 : 46,
               decoration: BoxDecoration(color: on ? Colors.white : const Color(0xFF2E3446), shape: BoxShape.circle),
-              child: AppIco(items[i].icon, color: on ? const Color(0xFF111827) : Colors.white.withOpacity(.8), size: 22),
-            )), color: const Color(0xFF1C2130), radius: 36, height: 68);
+              child: _bi(i, color: on ? const Color(0xFF111827) : Colors.white.withOpacity(.8), size: 22),
+            )), color: bg.computeLuminance() > .9 ? const Color(0xFF1C2130) : bg, radius: 36, height: 68);
 
       // ---- Soft (neumorphic): light bar, selected item raised in a white bubble
       case 'neumorph':
@@ -299,7 +304,7 @@ class LFBottomBar extends StatelessWidget {
                 shape: BoxShape.circle,
                 boxShadow: on ? const [BoxShadow(color: Color(0x22000000), blurRadius: 14, offset: Offset(4, 6)), BoxShadow(color: Colors.white, blurRadius: 10, offset: Offset(-4, -4))] : const [],
               ),
-              child: AppIco(items[i].icon, color: on ? active : const Color(0xFF64748B), size: 23),
+              child: _bi(i, color: on ? active : const Color(0xFF64748B), size: 23),
             )), color: const Color(0xFFEEF1F6), radius: 34, height: 70);
 
       // ---- Arc: selected icon in a soft circle with a coloured arc over it
@@ -310,7 +315,7 @@ class LFBottomBar extends StatelessWidget {
               child: Stack(alignment: Alignment.center, children: [
                 AnimatedContainer(duration: _dur, width: on ? 50 : 0, height: on ? 50 : 0, decoration: BoxDecoration(color: active.withOpacity(.12), shape: BoxShape.circle)),
                 if (on) TweenAnimationBuilder<double>(tween: Tween(begin: 0, end: 1), duration: const Duration(milliseconds: 450), curve: _ease, builder: (_, t, __) => CustomPaint(size: const Size(54, 54), painter: _ArcPainter(active, t))),
-                AppIco(items[i].icon, color: on ? active : idle, size: 23),
+                _bi(i, color: on ? active : idle, size: 23),
               ]),
             )), height: 70);
 
@@ -338,7 +343,7 @@ class LFBottomBar extends StatelessWidget {
                             curve: _ease,
                             decoration: BoxDecoration(color: i == selected ? active.withOpacity(.1) : Colors.transparent, borderRadius: BorderRadius.circular(28)),
                             child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                              AppIco(items[i].icon, color: i == selected ? active : idle, size: 22),
+                              _bi(i, color: i == selected ? active : idle, size: 22),
                               if (labels != 'icons') Padding(padding: const EdgeInsets.only(top: 3), child: _label(items[i].label, i == selected ? active : idle, i == selected)),
                             ]),
                           ),
@@ -386,7 +391,7 @@ class LFBottomBar extends StatelessWidget {
                             behavior: HitTestBehavior.opaque,
                             onTap: () => onTap(i),
                             child: Column(mainAxisAlignment: MainAxisAlignment.end, children: [
-                              if (i != selected) AppIco(items[i].icon, color: idle, size: 22),
+                              if (i != selected) _bi(i, color: idle, size: 22),
                               if (labels != 'icons') Padding(padding: const EdgeInsets.only(top: 4, bottom: 10), child: _label(items[i].label, i == selected ? active : idle, i == selected)) else const SizedBox(height: 14),
                             ]),
                           ),
@@ -419,7 +424,7 @@ class LFBottomBar extends StatelessWidget {
                       border: Border.all(color: Colors.white.withOpacity(.35)),
                     ),
                     child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                      AppIco(items[i].icon, color: i == selected ? active : Colors.white, size: 20),
+                      _bi(i, color: i == selected ? active : Colors.white, size: 20),
                       if (i == selected && labels != 'icons') Flexible(child: Padding(padding: const EdgeInsets.only(left: 6), child: _label(items[i].label, active, true, size: 13))),
                     ]),
                   ),
@@ -435,7 +440,7 @@ class LFBottomBar extends StatelessWidget {
           return Stack(children: [
             AnimatedPositioned(duration: _dur, curve: _ease, left: w * selected + 6, width: w - 12, top: 8, bottom: 8, child: DecoratedBox(decoration: BoxDecoration(color: active.withOpacity(.13), borderRadius: BorderRadius.circular(18)))),
             Positioned.fill(child: _row((i, on) => Column(mainAxisSize: MainAxisSize.min, children: [
-                  _icon(items[i].icon, on ? active : idle, on),
+                  _ib(i, on ? active : idle, on),
                   if (_showLabel(on)) Padding(padding: const EdgeInsets.only(top: 3), child: _label(items[i].label, on ? active : idle, on)),
                 ]))),
           ]);
@@ -454,7 +459,7 @@ class LFBottomBar extends StatelessWidget {
               boxShadow: [BoxShadow(color: active.withOpacity(.45), blurRadius: 24, offset: const Offset(0, 10))],
             ),
             child: _row((i, on) => Column(mainAxisSize: MainAxisSize.min, children: [
-                  _icon(items[i].icon, on ? Colors.white : Colors.white.withOpacity(.6), on),
+                  _ib(i, on ? Colors.white : Colors.white.withOpacity(.6), on),
                   AnimatedContainer(duration: _dur, margin: const EdgeInsets.only(top: 5), width: on ? 6 : 0, height: 6, decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle)),
                 ])),
           ),
@@ -469,7 +474,7 @@ class LFBottomBar extends StatelessWidget {
                 width: 42,
                 height: 42,
                 decoration: BoxDecoration(color: on ? active : const Color(0xFFF1F5F9), borderRadius: BorderRadius.circular(13)),
-                child: AppIco(items[i].icon, color: on ? _onActive : const Color(0xFF64748B), size: 21),
+                child: _bi(i, color: on ? _onActive : const Color(0xFF64748B), size: 21),
               ),
               if (labels != 'icons') Padding(padding: const EdgeInsets.only(top: 4), child: _label(items[i].label, on ? active : idle, on, size: 10.5)),
             ])), height: 76);
@@ -482,7 +487,7 @@ class LFBottomBar extends StatelessWidget {
               padding: EdgeInsets.symmetric(horizontal: on ? 14 : 10, vertical: 8),
               decoration: BoxDecoration(border: Border.all(color: on ? active : Colors.transparent, width: 1.6), borderRadius: BorderRadius.circular(24)),
               child: Row(mainAxisSize: MainAxisSize.min, children: [
-                AppIco(items[i].icon, color: on ? active : idle, size: 22),
+                _bi(i, color: on ? active : idle, size: 22),
                 AnimatedSize(duration: _dur, child: on && labels != 'icons' ? Padding(padding: const EdgeInsets.only(left: 7), child: _label(items[i].label, active, true, size: 13)) : const SizedBox.shrink()),
               ]),
             )));
@@ -495,7 +500,7 @@ class LFBottomBar extends StatelessWidget {
                 curve: _ease,
                 padding: EdgeInsets.symmetric(horizontal: on ? 18 : 12, vertical: 4),
                 decoration: BoxDecoration(color: on ? active.withOpacity(.15) : Colors.transparent, borderRadius: BorderRadius.circular(20)),
-                child: AppIco(items[i].icon, color: on ? active : idle, size: 24),
+                child: _bi(i, color: on ? active : idle, size: 24),
               ),
               if (_showLabel(on)) Padding(padding: const EdgeInsets.only(top: 4), child: _label(items[i].label, on ? active : idle, on, size: 12)),
             ])));
@@ -893,6 +898,127 @@ class LFHeader extends StatelessWidget {
             if (bottom != null) bottom!,
           ]),
         );
+      // ======== v27: seven more headers ========
+      case 'gradient_pill':
+        body = Container(
+          color: pageBg,
+          padding: EdgeInsets.fromLTRB(12, top + 8, 12, 8),
+          child: Container(
+            decoration: BoxDecoration(gradient: grad, borderRadius: BorderRadius.circular(40), boxShadow: [BoxShadow(color: bg.withOpacity(.4), blurRadius: 20, offset: const Offset(0, 8))]),
+            child: IconTheme(data: IconThemeData(color: fg), child: Column(mainAxisSize: MainAxisSize.min, children: [
+              SizedBox(height: 56, child: Row(children: [
+                if (leading != null) leading! else const SizedBox(width: 16),
+                Expanded(child: Text(title, textAlign: TextAlign.center, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: fg, fontSize: 18, fontWeight: FontWeight.w800))),
+                if (actions.isNotEmpty) actions.first else const SizedBox(width: 48),
+              ])),
+              if (bottom != null) bottom!,
+            ])),
+          ),
+        );
+      case 'tall_center':
+        body = Container(
+          decoration: BoxDecoration(gradient: grad, borderRadius: const BorderRadius.vertical(bottom: Radius.circular(30))),
+          padding: EdgeInsets.fromLTRB(6, top, 6, 18),
+          child: IconTheme(data: IconThemeData(color: fg), child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Row(children: [if (leading != null) leading! else const SizedBox(width: 48), const Spacer(), ...actions]),
+            if (logo != null) Container(padding: const EdgeInsets.all(3), decoration: BoxDecoration(color: Colors.white.withOpacity(.25), borderRadius: BorderRadius.circular(18)), child: SizedBox(width: 52, height: 52, child: FittedBox(child: logo))),
+            const SizedBox(height: 8),
+            Text(title, style: TextStyle(color: fg, fontSize: 22, fontWeight: FontWeight.w800)),
+            if (subtitle.isNotEmpty) Text(subtitle, style: TextStyle(color: fg.withOpacity(.8), fontSize: 13)),
+            if (bottom != null) bottom!,
+          ])),
+        );
+      case 'underline_title':
+        body = Container(
+          color: Colors.white,
+          padding: EdgeInsets.only(top: top),
+          child: IconTheme(data: const IconThemeData(color: Color(0xFF0F172A)), child: Column(mainAxisSize: MainAxisSize.min, children: [
+            SizedBox(height: 64, child: Row(children: [
+              if (leading != null) leading! else const SizedBox(width: 16),
+              Expanded(child: Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Color(0xFF0F172A), fontSize: 20, fontWeight: FontWeight.w800)),
+                const SizedBox(height: 4),
+                Container(width: 30, height: 4, decoration: BoxDecoration(gradient: grad, borderRadius: BorderRadius.circular(4))),
+              ])),
+              ...actions,
+              const SizedBox(width: 4),
+            ])),
+            if (bottom != null) bottom!,
+          ])),
+        );
+      case 'avatar_right':
+        body = Container(
+          color: pageBg,
+          padding: EdgeInsets.fromLTRB(20, top + 12, 16, 14),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Row(children: [
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(subtitle.isNotEmpty ? subtitle : 'Welcome', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: bg, fontSize: 13, fontWeight: FontWeight.w700)),
+                Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: pageBg.computeLuminance() > .5 ? const Color(0xFF0F172A) : Colors.white, fontSize: 26, fontWeight: FontWeight.w900, letterSpacing: -.8)),
+              ])),
+              IconTheme(data: IconThemeData(color: pageBg.computeLuminance() > .5 ? const Color(0xFF0F172A) : Colors.white), child: Row(children: [...actions, if (leading != null) leading!])),
+              if (logo != null) Container(margin: const EdgeInsets.only(left: 6), padding: const EdgeInsets.all(2), decoration: BoxDecoration(shape: BoxShape.circle, gradient: grad), child: ClipOval(child: SizedBox(width: 42, height: 42, child: FittedBox(fit: BoxFit.cover, child: logo)))),
+            ]),
+            if (bottom != null) bottom!,
+          ]),
+        );
+      case 'twotone':
+        Widget tt(Widget w) => Container(margin: const EdgeInsets.only(left: 6), width: 40, height: 40, decoration: BoxDecoration(color: Colors.white.withOpacity(.16), borderRadius: BorderRadius.circular(12)), child: IconTheme(data: IconThemeData(color: fg, size: 20), child: Center(child: w)));
+        body = Container(
+          decoration: BoxDecoration(color: bg),
+          padding: EdgeInsets.fromLTRB(8, top + 6, 12, 10),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Row(children: [
+              if (leading != null) tt(leading!),
+              const SizedBox(width: 10),
+              Container(width: 10, height: 10, decoration: BoxDecoration(color: bg2 == bg ? Colors.white : bg2, shape: BoxShape.circle)),
+              const SizedBox(width: 8),
+              Expanded(child: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: fg, fontSize: 20, fontWeight: FontWeight.w800))),
+              for (final a in actions) tt(a),
+            ]),
+            if (bottom != null) bottom!,
+          ]),
+        );
+      case 'neon':
+        body = Container(
+          decoration: BoxDecoration(color: const Color(0xFF07080D), border: Border(bottom: BorderSide(color: bg.withOpacity(.6)))),
+          padding: EdgeInsets.only(top: top),
+          child: IconTheme(data: IconThemeData(color: bg.computeLuminance() < .1 ? Colors.white : bg), child: Column(mainAxisSize: MainAxisSize.min, children: [
+            SizedBox(height: 60, child: Row(children: [
+              if (leading != null) leading! else const SizedBox(width: 16),
+              Expanded(child: Text(title, textAlign: center ? TextAlign.center : TextAlign.start, style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800, shadows: [Shadow(color: bg, blurRadius: 18)]))),
+              ...actions,
+              const SizedBox(width: 4),
+            ])),
+            if (bottom != null) bottom!,
+          ])),
+        );
+      case 'card_stack':
+        body = Container(
+          color: pageBg,
+          child: Stack(children: [
+            Container(height: top + 64, decoration: BoxDecoration(gradient: grad)),
+            Padding(
+              padding: EdgeInsets.fromLTRB(12, top + 10, 12, 8),
+              child: Container(
+                decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20), boxShadow: const [BoxShadow(color: Color(0x22000000), blurRadius: 18, offset: Offset(0, 8))]),
+                child: IconTheme(data: IconThemeData(color: bg), child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  SizedBox(height: 60, child: Row(children: [
+                    if (leading != null) leading! else const SizedBox(width: 14),
+                    if (logo != null) Padding(padding: const EdgeInsets.only(right: 10), child: logo),
+                    Expanded(child: Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Color(0xFF0F172A), fontSize: 17, fontWeight: FontWeight.w800)),
+                      if (subtitle.isNotEmpty) Text(subtitle, maxLines: 1, style: const TextStyle(color: Color(0xFF64748B), fontSize: 12)),
+                    ])),
+                    ...actions,
+                    const SizedBox(width: 4),
+                  ])),
+                  if (bottom != null) bottom!,
+                ])),
+              ),
+            ),
+          ]),
+        );
       case 'search':
       case 'greeting':
         // Title row with round buttons, then (search) a rounded search field.
@@ -1051,7 +1177,7 @@ class LFHeader extends StatelessWidget {
         );
     }
     // Status bar icons follow the header colour (dark icons on light headers).
-    final topColor = statusCustom ? statusBg : ({'outline': Colors.white, 'split': Colors.white, 'chip': Colors.white, 'soft': Color.lerp(Colors.white, bg, .12)!, 'glassfloat': pageBg, 'dark_round': const Color(0xFF16181D), 'shadow': const Color(0xFF0B0B0C), 'minimal': pageBg, 'bold': pageBg, 'search': pageBg, 'greeting': pageBg, 'floating': statusBg, 'island': statusBg, 'transparent': statusBg, 'pill': statusBg}[design] ?? bg);
+    final topColor = statusCustom ? statusBg : ({'underline_title': Colors.white, 'avatar_right': pageBg, 'gradient_pill': pageBg, 'neon': const Color(0xFF07080D), 'outline': Colors.white, 'split': Colors.white, 'chip': Colors.white, 'soft': Color.lerp(Colors.white, bg, .12)!, 'glassfloat': pageBg, 'dark_round': const Color(0xFF16181D), 'shadow': const Color(0xFF0B0B0C), 'minimal': pageBg, 'bold': pageBg, 'search': pageBg, 'greeting': pageBg, 'floating': statusBg, 'island': statusBg, 'transparent': statusBg, 'pill': statusBg}[design] ?? bg);
     final darkIcons = topColor.computeLuminance() > .6;
     // Hide on scroll: the header slides up and collapses; the status bar area stays coloured.
     return AnnotatedRegion<SystemUiOverlayStyle>(
@@ -1992,4 +2118,52 @@ class _StripesPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_StripesPainter o) => o.color != color;
+}
+
+
+/// Dotted background for the side menu ("Dots" background style).
+Widget dotsBackground(Color c, Widget child) => CustomPaint(painter: _DotsPainter(c), child: child);
+
+/// Speed dial: the floating button opens a small stack of buttons (WhatsApp, call, email…).
+class LFSpeedDial extends StatelessWidget {
+  const LFSpeedDial({super.key, required this.open, required this.color, required this.items, required this.onToggle, required this.onPick});
+  final bool open;
+  final Color color;
+  final List<(String icon, String label, String url)> items;
+  final VoidCallback onToggle;
+  final ValueChanged<String> onPick;
+  @override
+  Widget build(BuildContext context) => Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.end, children: [
+        for (var i = 0; i < items.length; i++)
+          AnimatedSlide(
+            offset: open ? Offset.zero : const Offset(0, .5),
+            duration: Duration(milliseconds: 200 + i * 50),
+            curve: Curves.easeOutBack,
+            child: AnimatedOpacity(
+              opacity: open ? 1 : 0,
+              duration: const Duration(milliseconds: 180),
+              child: IgnorePointer(
+                ignoring: !open,
+                child: Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), boxShadow: const [BoxShadow(color: Color(0x22000000), blurRadius: 8)]), child: Text(items[i].$2, style: const TextStyle(fontWeight: FontWeight.w600, color: Color(0xFF0F172A)))),
+                    const SizedBox(width: 10),
+                    GestureDetector(onTap: () => onPick(items[i].$3), child: Container(width: 46, height: 46, decoration: BoxDecoration(color: color, shape: BoxShape.circle, boxShadow: [BoxShadow(color: color.withOpacity(.4), blurRadius: 10, offset: const Offset(0, 4))]), child: AppIco(items[i].$1, color: Colors.white, size: 21))),
+                  ]),
+                ),
+              ),
+            ),
+          ),
+        GestureDetector(
+          onTap: onToggle,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 250),
+            width: 58,
+            height: 58,
+            decoration: BoxDecoration(color: open ? const Color(0xFF0F172A) : color, shape: BoxShape.circle, boxShadow: [BoxShadow(color: color.withOpacity(.45), blurRadius: 18, offset: const Offset(0, 8))]),
+            child: AnimatedRotation(turns: open ? .125 : 0, duration: const Duration(milliseconds: 250), child: const Icon(Icons.add_rounded, color: Colors.white, size: 30)),
+          ),
+        ),
+      ]);
 }

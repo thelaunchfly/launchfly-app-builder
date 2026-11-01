@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:lucide_icons/lucide_icons.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
 import 'package:http/http.dart' as http;
 import 'package:onesignal_flutter/onesignal_flutter.dart';
@@ -54,10 +55,12 @@ class NavItem {
       : label = '${j['label'] ?? j['title'] ?? ''}',
         icon = '${j['icon'] ?? 'home'}',
         url = '${j['url'] ?? ''}',
+        badge = '${j['badge'] ?? ''}',
         children = ((j['children'] as List?) ?? []).map((e) => NavItem(e as Map)).toList();
   final String label;
   final String icon;
   final String url;
+  final String badge;
   final List<NavItem> children;
 }
 
@@ -235,7 +238,14 @@ ThemeData _theme(Cfg cfg, Brightness b) {
   // A very dark brand colour would vanish on a dark background, so dark mode lightens it.
   final pd = b == Brightness.dark && p.computeLuminance() < .05 ? Colors.white : p;
   final scheme = ColorScheme.fromSeed(seedColor: p, brightness: b).copyWith(primary: pd, onPrimary: pd == Colors.white ? Colors.black : on);
-  return ThemeData(colorScheme: scheme, useMaterial3: true);
+  final font = '${cfg.v('style', 'font', '')}';
+  final base = ThemeData(colorScheme: scheme, useMaterial3: true);
+  if (font.isEmpty) return base;
+  try {
+    return base.copyWith(textTheme: GoogleFonts.getTextTheme(font, base.textTheme));
+  } catch (_) {
+    return base;
+  }
 }
 
 class _LaunchFlyAppState extends State<LaunchFlyApp> with WidgetsBindingObserver {
@@ -293,8 +303,34 @@ class _LaunchFlyAppState extends State<LaunchFlyApp> with WidgetsBindingObserver
   @override
   Widget build(BuildContext context) {
     Widget home;
+    final fu = cfg.m('force_update');
+    final myBuild = (cfg.raw['version_code'] as num?)?.toInt() ?? 0;
     if (cfg.raw['locked'] == true) {
       home = LockView(cfg: cfg);
+    } else if (fu['enabled'] == true && myBuild > 0 && myBuild < ((fu['min_build'] as num?)?.toInt() ?? 0)) {
+      home = Scaffold(
+        body: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(30),
+            child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+              AppLogo(url: cfg.iconUrl, size: 86, radius: 24),
+              const SizedBox(height: 22),
+              Text('${fu['title'] ?? 'Update required'}', textAlign: TextAlign.center, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
+              const SizedBox(height: 8),
+              Text('${fu['text'] ?? 'Please update to the latest version to keep using the app.'}', textAlign: TextAlign.center, style: const TextStyle(fontSize: 15, height: 1.5)),
+              const SizedBox(height: 26),
+              FilledButton(
+                style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(54), shape: const StadiumBorder()),
+                onPressed: () {
+                  final u = '${fu['url'] ?? ''}';
+                  launchUrl(Uri.parse(u.isNotEmpty ? u : 'https://play.google.com/store/apps/details?id=${cfg.raw['package_id'] ?? ''}'), mode: LaunchMode.externalApplication);
+                },
+                child: const Text('Update now', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+              ),
+            ]),
+          ),
+        ),
+      );
     } else if (splash) {
       final sp = cfg.m('splash');
       final c1 = hexColor(sp['bg'], Colors.white);
@@ -479,10 +515,18 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
       ..setNavigationDelegate(NavigationDelegate(
         onProgress: (p) => setState(() => _progress = p),
         onPageStarted: (_) => setState(() {
+              if (c.v('style', 'page_anim', 'none') != 'none') _pageShown = false;
               _offline = false;
               _barsHidden = false;
             }),
-        onPageFinished: (_) => _inject(),
+        onPageFinished: (_) async {
+          _inject();
+          final t = (await _web.getTitle() ?? '').split(RegExp(r' [|\-–] ')).first.trim();
+          if (mounted) setState(() {
+            _pageTitle = t;
+            _pageShown = true;
+          });
+        },
         onWebResourceError: (err) {
           if (err.isForMainFrame ?? true) setState(() => _offline = true);
         },
@@ -883,7 +927,7 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
         open(tpl.contains('{q}') ? tpl.replaceAll('{q}', Uri.encodeQueryComponent(q)) : '${c.url}${c.url.contains('?') ? '&' : '?'}s=${Uri.encodeQueryComponent(q)}');
       },
       pageBg: c.pageBg,
-      title: '${h['title'] ?? c.name}',
+      title: h['page_title'] == true && _pageTitle.isNotEmpty ? _pageTitle : '${h['title'] ?? c.name}',
       subtitle: '${h['subtitle'] ?? ''}',
       center: h['style'] == 'center',
       hidden: _barsHidden && h['hide_on_scroll'] == true,
@@ -894,10 +938,42 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
       actions: [
         if (c.v('notify', 'enabled', true) != false && c.v('notify', 'inbox', true) != false)
           IconButton(icon: Badge(isLabelVisible: _unread > 0, label: Text('$_unread'), child: Icon(outlineIcons ? LucideIcons.bell : Icons.notifications_rounded)), onPressed: _openInbox),
+        if (h['search_icon'] == true) IconButton(icon: Icon(outlineIcons ? LucideIcons.search : Icons.search_rounded), onPressed: _searchDialog),
+        if ('${h['cart_url'] ?? ''}'.isNotEmpty) IconButton(icon: Icon(outlineIcons ? LucideIcons.shoppingCart : Icons.shopping_cart_rounded), onPressed: () => open('${h['cart_url']}')),
         for (final ri in ((h['right_icons'] as List?) ?? []).cast<Map>()) IconButton(icon: AppIco('${ri['icon']}'), onPressed: () => _action(ri)),
       ],
       bottom: c.hasTabs && _tabs != null ? _tabBar(h['design'] == 'minimal' ? c.pageBg : bg, h['design'] == 'minimal' ? bg : fg) : null,
     );
+  }
+
+  String _pageTitle = '';
+  bool _pageShown = true;
+  bool _dial = false;
+
+  void _runSearch(String q) {
+    final h = c.m('header');
+    final tpl = '${h['search_url'] ?? ''}';
+    open(tpl.contains('{q}') ? tpl.replaceAll('{q}', Uri.encodeQueryComponent(q)) : '${c.url}${c.url.contains('?') ? '&' : '?'}s=${Uri.encodeQueryComponent(q)}');
+  }
+
+  Future<void> _searchDialog() async {
+    final ctl = TextEditingController();
+    final q = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(ctx).viewInsets.bottom + 16),
+        child: TextField(
+          controller: ctl,
+          autofocus: true,
+          textInputAction: TextInputAction.search,
+          decoration: InputDecoration(hintText: '${c.v('header', 'search_hint', 'Search')}', prefixIcon: const Icon(Icons.search_rounded), filled: true, border: OutlineInputBorder(borderRadius: BorderRadius.circular(30), borderSide: BorderSide.none)),
+          onSubmitted: (v) => Navigator.pop(ctx, v),
+        ),
+      ),
+    );
+    if (q != null && q.trim().isNotEmpty) _runSearch(q.trim());
   }
 
   /// The website reports scrolling so the header/bottom bar can hide while reading.
@@ -941,6 +1017,33 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
     final light = text == null || text.computeLuminance() < .5;
     final ic = light ? hexColor(c.v('drawer', 'icon_color'), c.primary) : text;
     text ??= const Color(0xFF0F172A);
+    final ls = '${c.v('drawer', 'list_style', 'pill')}';
+    // A section title, e.g. "Shop" or "Help" (link: app://heading)
+    if (it.url == 'app://heading') {
+      return Padding(padding: const EdgeInsets.fromLTRB(26, 18, 20, 6), child: Text(it.label.toUpperCase(), style: TextStyle(color: text.withOpacity(.5), fontSize: 11.5, fontWeight: FontWeight.w800, letterSpacing: 1.2)));
+    }
+    if (it.children.isEmpty && ls != 'pill') {
+      void go() {
+        Navigator.pop(context);
+        open(it.url);
+      }
+      final lead = ls == 'iconbox'
+          ? Container(width: 38, height: 38, decoration: BoxDecoration(color: first ? ic : ic.withOpacity(.12), borderRadius: BorderRadius.circular(12)), child: Center(child: AppIco(it.icon, color: first ? Colors.white : ic, size: 20)))
+          : AppIco(it.icon, color: ic, size: 22);
+      final label = Text(it.label, style: TextStyle(color: text, fontSize: ls == 'bold' ? 19 : 15.5, fontWeight: ls == 'bold' || first ? FontWeight.w700 : FontWeight.w500));
+      final badge = it.badge.isEmpty ? null : Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2), decoration: BoxDecoration(color: const Color(0xFFEF4444), borderRadius: BorderRadius.circular(20)), child: Text(it.badge, style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w700)));
+      final row = Row(children: [if (ls != 'bold') ...[lead, const SizedBox(width: 14)], Expanded(child: label), if (badge != null) badge]);
+      switch (ls) {
+        case 'card':
+          return Padding(padding: const EdgeInsets.fromLTRB(12, 4, 12, 4), child: Material(color: first ? ic.withOpacity(.1) : (light ? Colors.white : Colors.white.withOpacity(.06)), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: BorderSide(color: first ? ic : text.withOpacity(.1))), child: InkWell(borderRadius: BorderRadius.circular(16), onTap: go, child: Padding(padding: const EdgeInsets.all(14), child: row))));
+        case 'bar':
+          return InkWell(onTap: go, child: Container(padding: const EdgeInsets.fromLTRB(20, 14, 20, 14), decoration: BoxDecoration(color: first ? ic.withOpacity(.08) : null, border: Border(left: BorderSide(color: first ? ic : Colors.transparent, width: 4))), child: row));
+        case 'divider':
+          return InkWell(onTap: go, child: Container(margin: const EdgeInsets.symmetric(horizontal: 20), padding: const EdgeInsets.symmetric(vertical: 16), decoration: BoxDecoration(border: Border(bottom: BorderSide(color: text.withOpacity(.08)))), child: Row(children: [Expanded(child: row), Icon(Icons.chevron_right_rounded, color: text.withOpacity(.35))])));
+        default: // iconbox, bold, plain
+          return InkWell(onTap: go, child: Padding(padding: EdgeInsets.symmetric(horizontal: 22, vertical: ls == 'bold' ? 12 : 10), child: row));
+      }
+    }
     if (it.children.isNotEmpty) {
       return ExpansionTile(leading: AppIco(it.icon, color: ic), title: Text(it.label, style: TextStyle(color: text)), iconColor: text, collapsedIconColor: text,
           textColor: text, collapsedTextColor: text, shape: const Border(), collapsedShape: const Border(),
@@ -984,6 +1087,18 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
       for (var i = 0; i < c.items('drawer').length; i++) SlideIn(index: i, child: _drawerItem(c.items('drawer')[i], text: text, rounded: true, first: i == 0)),
       if (c.pages.isNotEmpty) Divider(color: dark ? Colors.white24 : null),
       for (final pg in c.pages) _drawerItem(NavItem({'label': pg.label, 'icon': 'news', 'url': pg.url}), text: text, rounded: true),
+      if ('${c.v('drawer', 'footer_label', '')}'.isNotEmpty)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 18, 16, 8),
+          child: FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: dark ? Colors.white : const Color(0xFF0F172A), foregroundColor: dark ? const Color(0xFF0F172A) : Colors.white, minimumSize: const Size.fromHeight(52), shape: const StadiumBorder()),
+            onPressed: () {
+              Navigator.pop(context);
+              open('${c.v('drawer', 'footer_url', '')}');
+            },
+            child: Text('${c.v('drawer', 'footer_label')}', style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+          ),
+        ),
       if (about['enabled'] == true)
         Padding(padding: const EdgeInsets.symmetric(horizontal: 10), child: ListTile(shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)), leading: Icon(Icons.info_outline_rounded, color: dark ? text : hexColor(c.v('drawer', 'icon_color'), c.primary)), title: Text('About', style: TextStyle(color: text, fontWeight: FontWeight.w500)), onTap: () {
           Navigator.pop(context);
@@ -998,7 +1113,11 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
       shape: style == 'modern' || style == 'minimal' || style == 'dark' || style == 'gradient'
           ? const RoundedRectangleBorder(borderRadius: BorderRadius.horizontal(right: Radius.circular(24)))
           : (style == 'floating' ? RoundedRectangleBorder(borderRadius: BorderRadius.circular(26)) : const RoundedRectangleBorder()),
-      child: style == 'gradient'
+      child: c.v('drawer', 'bg_style') == 'dots' && style != 'gradient'
+          ? dotsBackground((dark ? Colors.white : head).withOpacity(.08), list)
+          : c.v('drawer', 'bg_style') == 'tint' && !dark
+          ? ColoredBox(color: Color.lerp(Colors.white, head, .07)!, child: list)
+          : style == 'gradient'
           ? Container(decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [head, Color.lerp(head, Colors.black, .45)!])), child: list)
           : list,
     );
@@ -1052,7 +1171,7 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
       );
     } else {
       bar = LFBottomBar(
-        items: [for (final it in items) BarItem(it.icon, it.label)],
+        items: [for (final it in items) BarItem(it.icon, it.label, it.badge)],
         selected: sel,
         onTap: tap,
         design: design,
@@ -1121,7 +1240,12 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
             if (_banner != null && c.v('ads', 'banner_position') == 'top') SizedBox(height: _banner!.size.height.toDouble(), width: double.infinity, child: AdWidget(ad: _banner!)),
             Expanded(
               child: Stack(children: [
-                WebViewWidget(controller: _web),
+                AnimatedSlide(
+                  offset: _pageShown || c.v('style', 'page_anim') != 'slide' ? Offset.zero : const Offset(.06, 0),
+                  duration: const Duration(milliseconds: 280),
+                  curve: Curves.easeOutCubic,
+                  child: AnimatedOpacity(opacity: _pageShown ? 1 : .25, duration: const Duration(milliseconds: 280), child: WebViewWidget(controller: _web)),
+                ),
                 if (loading && loader['style'] == 'bar') LinearProgressIndicator(value: _progress / 100, color: lc, backgroundColor: Colors.transparent, minHeight: 3),
                 if (loading && loader['style'] == 'dots') Center(child: _Dots(color: lc)),
                 if (loading && lfLoader('${loader['style']}', lc) != null) Center(child: lfLoader('${loader['style']}', lc)),
@@ -1142,6 +1266,20 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
                   open(c.items('bottom_nav')[mid].url);
                 },
                 child: AppIco(c.items('bottom_nav')[c.items('bottom_nav').length ~/ 2].icon, color: Colors.white))
+            : fab['type'] == 'speeddial'
+            ? Padding(
+                padding: EdgeInsets.only(bottom: _floatingBar ? 6 : 0),
+                child: LFSpeedDial(
+                  open: _dial,
+                  color: hexColor(fab['color'], Colors.green),
+                  items: [for (final it in ((fab['items'] as List?) ?? []).cast<Map>()) ('${it['icon'] ?? 'chat'}', '${it['label'] ?? ''}', '${it['url'] ?? ''}')],
+                  onToggle: () => setState(() => _dial = !_dial),
+                  onPick: (u) {
+                    setState(() => _dial = false);
+                    open(u);
+                  },
+                ),
+              )
             : fab['type'] == null || fab['type'] == 'none'
             ? null
             : Padding(
