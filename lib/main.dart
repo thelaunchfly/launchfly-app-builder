@@ -46,6 +46,15 @@ const _outline = <String, IconData>{
   'bell': LucideIcons.bell, 'globe': LucideIcons.globe, 'lock': LucideIcons.lock, 'gift': LucideIcons.gift,
   'reload': LucideIcons.refreshCw,
 };
+/// The app's own words in the owner's chosen language (website text is not touched).
+String appLang = 'en';
+const _tr = <String, Map<String, String>>{
+  'si': {'Notifications': 'දැනුම්දීම්', 'About': 'අප ගැන', 'Follow us': 'අපව අනුගමනය කරන්න', 'No notifications yet': 'තවම දැනුම්දීම් නැත', 'Try again': 'නැවත උත්සාහ කරන්න', 'Update now': 'දැන් යාවත්කාලීන කරන්න', 'Share app': 'යෙදුම බෙදාගන්න', 'Open': 'විවෘත කරන්න', 'Go home': 'මුල් පිටුවට', 'Rate us': 'අපට ඇගයීමක් දෙන්න', 'Find us': 'අපව සොයන්න', 'Call': 'අමතන්න', 'Email': 'ඊමේල්'},
+  'ta': {'Notifications': 'அறிவிப்புகள்', 'About': 'எங்களைப் பற்றி', 'Follow us': 'எங்களைப் பின்தொடருங்கள்', 'No notifications yet': 'இன்னும் அறிவிப்புகள் இல்லை', 'Try again': 'மீண்டும் முயற்சிக்கவும்', 'Update now': 'இப்போது புதுப்பிக்கவும்', 'Share app': 'பகிரவும்', 'Open': 'திற', 'Go home': 'முகப்பு', 'Rate us': 'மதிப்பிடுங்கள்', 'Find us': 'எங்களைக் கண்டறியவும்', 'Call': 'அழைக்க', 'Email': 'மின்னஞ்சல்'},
+  'hi': {'Notifications': 'सूचनाएँ', 'About': 'हमारे बारे में', 'Follow us': 'हमें फ़ॉलो करें', 'No notifications yet': 'अभी कोई सूचना नहीं', 'Try again': 'फिर से कोशिश करें', 'Update now': 'अभी अपडेट करें', 'Share app': 'ऐप शेयर करें', 'Open': 'खोलें', 'Go home': 'होम', 'Rate us': 'रेटिंग दें', 'Find us': 'हमें खोजें', 'Call': 'कॉल', 'Email': 'ईमेल'},
+};
+String tr(String s) => _tr[appLang]?[s] ?? s;
+
 /// Set from the design ("Theme & display" → icon style).
 bool outlineIcons = true;
 IconData iconOf(dynamic n) => (outlineIcons ? _outline : _filled)[n] ?? (outlineIcons ? LucideIcons.circle : Icons.circle_outlined);
@@ -180,6 +189,13 @@ void backgroundTask() {
   });
 }
 
+/// Anonymous usage counts for the owner's dashboard (app opens, bottom bar taps).
+void trackEvent(Map bundled, String ev) {
+  final u = '${bundled['remote_config'] ?? ''}'.replaceFirst('/api/app-config/', '/api/app-event/');
+  if (!u.contains('/api/app-event/')) return;
+  http.post(Uri.parse(u), body: {'e': ev}).catchError((_) => http.Response('', 0));
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final bundled = jsonDecode(await rootBundle.loadString('assets/app_config.json')) as Map<String, dynamic>;
@@ -197,6 +213,7 @@ Future<void> main() async {
   builtinIcon = iconOf;
   final cfg = Cfg(merged);
   outlineIcons = cfg.v('style', 'icons', 'outline') != 'filled';
+  appLang = '${cfg.v('app', 'language', 'en')}';
   applySystemUi(cfg);
   if (cfg.v('ads', 'enabled', false) == true) {
     unawaited(MobileAds.instance.initialize());
@@ -219,6 +236,7 @@ Future<void> main() async {
     unawaited(Permission.notification.request());
     unawaited(checkInbox(bundled));
   }
+  trackEvent(bundled, 'open');
   runApp(LaunchFlyApp(initial: cfg, bundled: bundled, prefs: prefs));
 }
 
@@ -325,7 +343,7 @@ class _LaunchFlyAppState extends State<LaunchFlyApp> with WidgetsBindingObserver
                   final u = '${fu['url'] ?? ''}';
                   launchUrl(Uri.parse(u.isNotEmpty ? u : 'https://play.google.com/store/apps/details?id=${cfg.raw['package_id'] ?? ''}'), mode: LaunchMode.externalApplication);
                 },
-                child: const Text('Update now', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                child: Text(tr('Update now'), style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
               ),
             ]),
           ),
@@ -514,7 +532,9 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
       ..addJavaScriptChannel('LFScroll', onMessageReceived: _onScrollMsg)
       ..setNavigationDelegate(NavigationDelegate(
         onProgress: (p) => setState(() => _progress = p),
-        onPageStarted: (_) => setState(() {
+        onPageStarted: (u) => setState(() {
+              _lastMain = u;
+              _httpErr = 0;
               if (c.v('style', 'page_anim', 'none') != 'none') _pageShown = false;
               _offline = false;
               _barsHidden = false;
@@ -527,6 +547,11 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
             _pageShown = true;
           });
         },
+        onHttpError: (e) {
+          final code = e.response?.statusCode ?? 0;
+          if (code >= 400 && c.v('errors', 'enabled', true) != false && (e.request?.uri.toString() ?? '') == _lastMain) setState(() => _httpErr = code);
+        },
+        onUrlChange: (ch) => _lastMain = ch.url ?? _lastMain,
         onWebResourceError: (err) {
           if (err.isForMainFrame ?? true) setState(() => _offline = true);
         },
@@ -535,6 +560,15 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
     _setup();
     _loadAds();
     WidgetsBinding.instance.addPostFrameCallback((_) => _engage());
+    final to = DateTime.tryParse('${c.v('engage', 'countdown_to', '')}');
+    if (c.v('engage', 'countdown', false) == true && to != null) {
+      void upd() {
+        final l = to.difference(DateTime.now());
+        if (mounted) setState(() => _left = l.isNegative ? Duration.zero : l);
+      }
+      upd();
+      _tick = Timer.periodic(const Duration(seconds: 1), (_) => upd());
+    }
   }
 
   int _unread = 0;
@@ -586,6 +620,53 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
     if (e['maintenance'] == true) return;
     final prefs = await SharedPreferences.getInstance();
     if (!mounted) return;
+    // What's new: once after each app update
+    final build = (c.raw['version_code'] as num?)?.toInt() ?? 0;
+    if (e['whatsnew'] == true && build > 0 && (prefs.getInt('whatsnew_seen') ?? 0) < build && '${e['whatsnew_text'] ?? ''}'.isNotEmpty) {
+      await prefs.setInt('whatsnew_seen', build);
+      if (!mounted) return;
+      await showModalBottomSheet<void>(
+        context: context,
+        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
+        builder: (ctx) => Padding(
+          padding: const EdgeInsets.fromLTRB(24, 26, 24, 24),
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [AppLogo(url: c.iconUrl, size: 44, radius: 12), const SizedBox(width: 12), Text('${e['whatsnew_title'] ?? "What's new"}', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800))]),
+            const SizedBox(height: 14),
+            Text('${e['whatsnew_text']}', style: const TextStyle(fontSize: 15, height: 1.55)),
+            const SizedBox(height: 20),
+            FilledButton(style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(50), shape: const StadiumBorder()), onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
+          ]),
+        ),
+      );
+      return;
+    }
+    // Promotion: at most once a day
+    final today = DateTime.now().toIso8601String().substring(0, 10);
+    if (e['promo'] == true && '${e['promo_image'] ?? ''}'.isNotEmpty && prefs.getString('promo_day') != today) {
+      await prefs.setString('promo_day', today);
+      if (!mounted) return;
+      final link = '${e['promo_url'] ?? ''}';
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: const EdgeInsets.all(28),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            GestureDetector(
+              onTap: () {
+                Navigator.pop(ctx);
+                if (link.isNotEmpty) open(link);
+              },
+              child: ClipRRect(borderRadius: BorderRadius.circular(22), child: Image.network('${e['promo_image']}', fit: BoxFit.cover, errorBuilder: (_, __, ___) => const SizedBox())),
+            ),
+            const SizedBox(height: 14),
+            GestureDetector(onTap: () => Navigator.pop(ctx), child: Container(width: 44, height: 44, decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle), child: const Icon(Icons.close_rounded))),
+          ]),
+        ),
+      );
+      return;
+    }
     final id = '${e['announce_id'] ?? '1'}';
     if (e['announce'] == true && '${e['announce_title'] ?? ''}${e['announce_text'] ?? ''}'.isNotEmpty && prefs.getString('announce_seen') != id) {
       await prefs.setString('announce_seen', id);
@@ -814,6 +895,10 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
   }
 
   Future<void> open(String url) async {
+    if (url.startsWith('browser:')) {
+      await launchUrl(Uri.parse(url.substring(8)), mode: LaunchMode.externalApplication);
+      return;
+    }
     if (url.startsWith('app://')) {
       switch (url.substring(6)) {
         case 'about':
@@ -836,7 +921,19 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
     }
   }
 
-  void _share() => Share.share('${c.v('share', 'text', '') ?? ''}'.isNotEmpty ? '${c.v('share', 'text')}' : '${c.name} ${c.url}');
+  Future<void> _share() async {
+    var text = '${c.v('share', 'text', '') ?? ''}'.isNotEmpty ? '${c.v('share', 'text')}' : '${c.name} ${c.url}';
+    if (c.v('share', 'referral', false) == true) {
+      final prefs = await SharedPreferences.getInstance();
+      var id = prefs.getString('ref_id');
+      if (id == null) {
+        id = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
+        await prefs.setString('ref_id', id);
+      }
+      text += '\n${c.url}${c.url.contains('?') ? '&' : '?'}ref=$id';
+    }
+    Share.share(text);
+  }
 
   void _action(Map ri) {
     switch ('${ri['action']}') {
@@ -886,6 +983,14 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
         icon: img.isNotEmpty ? Image.network(img, height: 80, errorBuilder: (_, __, ___) => const SizedBox()) : null,
         title: Text('${e['title'] ?? 'Do you want to exit?'}'),
         actions: [
+          if (e['rate'] == true)
+            TextButton(
+              onPressed: () {
+                Navigator.pop(ctx, false);
+                launchUrl(Uri.parse('https://play.google.com/store/apps/details?id=${c.raw['package_id'] ?? ''}'), mode: LaunchMode.externalApplication);
+              },
+              child: Text(tr('Rate us')),
+            ),
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text('${e['no'] ?? 'No'}')),
           FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text('${e['yes'] ?? 'Yes'}')),
         ],
@@ -911,7 +1016,7 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
     } else if (left == 'home') {
       leading = IconButton(icon: Icon(outlineIcons ? LucideIcons.home : Icons.home_rounded), onPressed: () => open(c.url));
     } else if (c.hasDrawer && (left == 'auto' || left == 'menu')) {
-      leading = IconButton(icon: Icon(outlineIcons ? LucideIcons.menu : Icons.menu_rounded), onPressed: () => _sk.currentState?.openDrawer());
+      leading = IconButton(icon: Icon(outlineIcons ? LucideIcons.menu : Icons.menu_rounded), onPressed: () => c.v('drawer', 'side') == 'right' ? _sk.currentState?.openEndDrawer() : _sk.currentState?.openDrawer());
     }
     return LFHeader(
       design: '${h['design'] ?? 'classic'}',
@@ -947,6 +1052,10 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
   }
 
   String _pageTitle = '';
+  int _httpErr = 0;
+  String _lastMain = '';
+  Timer? _tick;
+  Duration _left = Duration.zero;
   bool _pageShown = true;
   bool _dial = false;
 
@@ -974,6 +1083,30 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
       ),
     );
     if (q != null && q.trim().isNotEmpty) _runSearch(q.trim());
+  }
+
+  Widget _countdownBar() {
+    final e = c.m('engage');
+    final col = hexColor(e['countdown_color'], const Color(0xFFEF4444));
+    String two(int n) => n.toString().padLeft(2, '0');
+    final d = _left.inDays, h = _left.inHours % 24, m = _left.inMinutes % 60, sec = _left.inSeconds % 60;
+    Widget box(String v, String l) => Container(margin: const EdgeInsets.only(left: 4), padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3), decoration: BoxDecoration(color: Colors.white.withOpacity(.2), borderRadius: BorderRadius.circular(6)), child: Text('$v$l', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 12.5)));
+    return GestureDetector(
+      onTap: () => '${e['countdown_url'] ?? ''}'.isNotEmpty ? open('${e['countdown_url']}') : null,
+      child: Container(
+        color: col,
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        child: Row(children: [
+          const Icon(Icons.local_fire_department_rounded, color: Colors.white, size: 18),
+          const SizedBox(width: 6),
+          Expanded(child: Text('${e['countdown_text'] ?? 'Sale ends in'}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700))),
+          if (d > 0) box('$d', 'd'),
+          box(two(h), 'h'),
+          box(two(m), 'm'),
+          box(two(sec), 's'),
+        ]),
+      ),
+    );
   }
 
   /// The website reports scrolling so the header/bottom bar can hide while reading.
@@ -1100,12 +1233,12 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
           ),
         ),
       if (about['enabled'] == true)
-        Padding(padding: const EdgeInsets.symmetric(horizontal: 10), child: ListTile(shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)), leading: Icon(Icons.info_outline_rounded, color: dark ? text : hexColor(c.v('drawer', 'icon_color'), c.primary)), title: Text('About', style: TextStyle(color: text, fontWeight: FontWeight.w500)), onTap: () {
+        Padding(padding: const EdgeInsets.symmetric(horizontal: 10), child: ListTile(shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)), leading: Icon(Icons.info_outline_rounded, color: dark ? text : hexColor(c.v('drawer', 'icon_color'), c.primary)), title: Text(tr('About'), style: TextStyle(color: text, fontWeight: FontWeight.w500)), onTap: () {
           Navigator.pop(context);
           Navigator.push(context, MaterialPageRoute(builder: (_) => AboutView(cfg: c)));
         })),
       if (c.v('share', 'enabled', false) == true)
-        Padding(padding: const EdgeInsets.symmetric(horizontal: 10), child: ListTile(shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)), leading: Icon(Icons.share_rounded, color: dark ? text : hexColor(c.v('drawer', 'icon_color'), c.primary)), title: Text('Share app', style: TextStyle(color: text, fontWeight: FontWeight.w500)), onTap: () { Navigator.pop(context); _share(); })),
+        Padding(padding: const EdgeInsets.symmetric(horizontal: 10), child: ListTile(shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)), leading: Icon(Icons.share_rounded, color: dark ? text : hexColor(c.v('drawer', 'icon_color'), c.primary)), title: Text(tr('Share app'), style: TextStyle(color: text, fontWeight: FontWeight.w500)), onTap: () { Navigator.pop(context); _share(); })),
     ]);
     final drawer = Drawer(
       backgroundColor: style == 'dark' ? const Color(0xFF0F172A) : (style == 'gradient' ? Colors.transparent : Colors.white),
@@ -1140,6 +1273,7 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
     final sel = _tab.clamp(0, items.length - 1);
     void tap(int i) {
       setState(() => _tab = i);
+      trackEvent(c.raw, 'tab:${items[i].label}');
       open(items[i].url);
     }
 
@@ -1188,6 +1322,7 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
   @override
   void dispose() {
     pendingUrl.removeListener(_openPending);
+    _tick?.cancel();
     _life?.dispose();
     _appOpen?.dispose();
     _rewarded?.dispose();
@@ -1207,7 +1342,10 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
     final eng = c.m('engage');
     final bn = c.m('bottom_nav');
     final active = hexColor(bn['active'], c.primary);
-    if (eng['maintenance'] == true) {
+    final mf = DateTime.tryParse('${eng['maint_from'] ?? ''}'), mt = DateTime.tryParse('${eng['maint_to'] ?? ''}');
+    final now = DateTime.now();
+    final scheduled = mf != null && now.isAfter(mf) && (mt == null || now.isBefore(mt));
+    if (eng['maintenance'] == true || scheduled) {
       final ink = c.pageBg.computeLuminance() > .5 ? const Color(0xFF0F172A) : Colors.white;
       return Scaffold(
         backgroundColor: c.pageBg,
@@ -1231,12 +1369,14 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
       child: Scaffold(
         key: _sk,
         backgroundColor: c.pageBg,
-        drawer: _drawer(),
+        drawer: c.v('drawer', 'side') == 'right' ? null : _drawer(),
+        endDrawer: c.v('drawer', 'side') == 'right' ? _drawer() : null,
         body: SafeArea(
           top: c.m('header')['enabled'] == false,
           bottom: !_floatingBar,
           child: Column(children: [
             if (_header() != null) MediaQuery.removePadding(context: context, removeTop: false, child: _header()!),
+            if (_left > Duration.zero) _countdownBar(),
             if (_banner != null && c.v('ads', 'banner_position') == 'top') SizedBox(height: _banner!.size.height.toDouble(), width: double.infinity, child: AdWidget(ad: _banner!)),
             Expanded(
               child: Stack(children: [
@@ -1244,12 +1384,37 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
                   offset: _pageShown || c.v('style', 'page_anim') != 'slide' ? Offset.zero : const Offset(.06, 0),
                   duration: const Duration(milliseconds: 280),
                   curve: Curves.easeOutCubic,
-                  child: AnimatedOpacity(opacity: _pageShown ? 1 : .25, duration: const Duration(milliseconds: 280), child: WebViewWidget(controller: _web)),
+                  child: AnimatedOpacity(
+                    opacity: _pageShown ? 1 : .25,
+                    duration: const Duration(milliseconds: 280),
+                    child: c.v('app', 'swipe_back', false) == true
+                        ? GestureDetector(
+                            onHorizontalDragEnd: (d) async {
+                              if ((d.primaryVelocity ?? 0) > 900 && await _web.canGoBack()) _web.goBack();
+                            },
+                            child: WebViewWidget(controller: _web),
+                          )
+                        : WebViewWidget(controller: _web),
+                  ),
                 ),
                 if (loading && loader['style'] == 'bar') LinearProgressIndicator(value: _progress / 100, color: lc, backgroundColor: Colors.transparent, minHeight: 3),
                 if (loading && loader['style'] == 'dots') Center(child: _Dots(color: lc)),
                 if (loading && lfLoader('${loader['style']}', lc) != null) Center(child: lfLoader('${loader['style']}', lc)),
-                if (_offline) _OfflineView(color: c.primary, title: '${off['title'] ?? 'No internet connection'}', text: '${off['text'] ?? ''}', onRetry: () => _web.reload()),
+                if (loading && loader['style'] == 'skeleton') const Positioned.fill(child: _Skeleton()),
+                if (_offline) _OfflineView(color: c.primary, title: '${off['title'] ?? 'No internet connection'}', text: '${off['text'] ?? ''}', image: '${off['image'] ?? ''}', onRetry: () => _web.reload()),
+                if (_httpErr > 0 && !_offline)
+                  _OfflineView(
+                    color: c.primary,
+                    icon: Icons.search_off_rounded,
+                    title: '${c.v('errors', 'title', 'Page not found')}',
+                    text: '${c.v('errors', 'text', "The page you're looking for isn't here.")}',
+                    image: '${c.v('errors', 'image', '')}',
+                    button: tr('Go home'),
+                    onRetry: () {
+                      setState(() => _httpErr = 0);
+                      open(c.url);
+                    },
+                  ),
               ]),
             ),
             if (_banner != null && c.v('ads', 'banner_position') != 'top') SizedBox(height: _banner!.size.height.toDouble(), width: double.infinity, child: AdWidget(ad: _banner!)),
@@ -1354,7 +1519,7 @@ class _InboxViewState extends State<InboxView> {
             Padding(
               padding: const EdgeInsets.only(left: 10),
               child: Row(children: [
-                Expanded(child: Text('Notifications', style: TextStyle(color: fg, fontSize: 28, fontWeight: FontWeight.w800, letterSpacing: -.6))),
+                Expanded(child: Text(tr('Notifications'), style: TextStyle(color: fg, fontSize: 28, fontWeight: FontWeight.w800, letterSpacing: -.6))),
                 if (items.isNotEmpty)
                   Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5), decoration: BoxDecoration(color: Colors.white.withOpacity(.2), borderRadius: BorderRadius.circular(20)), child: Text('${items.length}', style: TextStyle(color: fg, fontWeight: FontWeight.w700))),
               ]),
@@ -1368,7 +1533,7 @@ class _InboxViewState extends State<InboxView> {
                   child: Column(mainAxisSize: MainAxisSize.min, children: [
                     Container(width: 96, height: 96, decoration: BoxDecoration(color: accent.withOpacity(.1), shape: BoxShape.circle), child: Icon(LucideIcons.bellOff, size: 40, color: accent)),
                     const SizedBox(height: 16),
-                    Text('No notifications yet', style: TextStyle(color: ink, fontSize: 18, fontWeight: FontWeight.w800)),
+                    Text(tr('No notifications yet'), style: TextStyle(color: ink, fontSize: 18, fontWeight: FontWeight.w800)),
                     const SizedBox(height: 6),
                     Text('We\'ll let you know when something new arrives.', style: TextStyle(color: ink.withOpacity(.55))),
                   ]),
@@ -1419,7 +1584,7 @@ class _InboxViewState extends State<InboxView> {
                                 if (url.isNotEmpty)
                                   Padding(
                                     padding: const EdgeInsets.only(top: 10, left: 56),
-                                    child: Row(children: [Text('Open', style: TextStyle(color: accent, fontWeight: FontWeight.w700)), const SizedBox(width: 4), Icon(LucideIcons.arrowRight, size: 16, color: accent)]),
+                                    child: Row(children: [Text(tr('Open'), style: TextStyle(color: accent, fontWeight: FontWeight.w700)), const SizedBox(width: 4), Icon(LucideIcons.arrowRight, size: 16, color: accent)]),
                                   ),
                               ]),
                             ),
@@ -1480,10 +1645,12 @@ class AboutView extends StatelessWidget {
     final a = cfg.m('about');
     String v(String k) => '${a[k] ?? ''}'.trim();
     // (icon, label, link, brand colour)
+    final qrLink = '${cfg.v('share', 'qr', false) == true ? 'https://play.google.com/store/apps/details?id=${cfg.raw['package_id'] ?? ''}' : ''}';
     final quick = <(IconData, String, String, Color)>[
-      if (v('phone').isNotEmpty) (LucideIcons.phone, 'Call', 'tel:${v('phone')}', const Color(0xFF2563EB)),
+      if (v('map_url').isNotEmpty) (LucideIcons.mapPin, tr('Find us'), v('map_url'), const Color(0xFFDC2626)),
+      if (v('phone').isNotEmpty) (LucideIcons.phone, tr('Call'), 'tel:${v('phone')}', const Color(0xFF2563EB)),
       if (v('whatsapp').isNotEmpty) (LucideIcons.messageCircle, 'WhatsApp', 'https://wa.me/${v('whatsapp').replaceAll(RegExp(r'\D'), '')}', const Color(0xFF16A34A)),
-      if (v('email').isNotEmpty) (LucideIcons.mail, 'Email', 'mailto:${v('email')}', const Color(0xFFEA580C)),
+      if (v('email').isNotEmpty) (LucideIcons.mail, tr('Email'), 'mailto:${v('email')}', const Color(0xFFEA580C)),
       if (v('website').isNotEmpty) (LucideIcons.globe, 'Website', v('website'), const Color(0xFF7C3AED)),
     ];
     final social = <(IconData, String, String, Color)>[
@@ -1520,7 +1687,7 @@ class AboutView extends StatelessWidget {
                   top: MediaQuery.of(context).padding.top + 6,
                   child: IconButton(icon: Icon(outlineIcons ? LucideIcons.arrowLeft : Icons.arrow_back_rounded, color: fg), onPressed: () => Navigator.pop(context)),
                 ),
-                Positioned(left: 0, right: 0, top: MediaQuery.of(context).padding.top + 16, child: Text('About', textAlign: TextAlign.center, style: TextStyle(color: fg, fontSize: 17, fontWeight: FontWeight.w700))),
+                Positioned(left: 0, right: 0, top: MediaQuery.of(context).padding.top + 16, child: Text(tr('About'), textAlign: TextAlign.center, style: TextStyle(color: fg, fontSize: 17, fontWeight: FontWeight.w700))),
               ]),
             ),
             Padding(
@@ -1557,8 +1724,27 @@ class AboutView extends StatelessWidget {
             ),
           ]),
         ),
+        if (qrLink.isNotEmpty)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 22, 16, 0),
+              child: Container(
+                padding: const EdgeInsets.all(18),
+                decoration: BoxDecoration(color: card, borderRadius: BorderRadius.circular(22)),
+                child: Row(children: [
+                  ClipRRect(borderRadius: BorderRadius.circular(12), child: Image.network('https://api.qrserver.com/v1/create-qr-code/?size=240x240&margin=8&data=${Uri.encodeComponent(qrLink)}', width: 110, height: 110, errorBuilder: (_, __, ___) => const SizedBox(width: 110))),
+                  const SizedBox(width: 16),
+                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(tr('Share app'), style: TextStyle(color: ink, fontSize: 17, fontWeight: FontWeight.w800)),
+                    const SizedBox(height: 4),
+                    Text('Scan to download ${cfg.name}', style: TextStyle(color: ink.withOpacity(.6))),
+                  ])),
+                ]),
+              ),
+            ),
+          ),
         if (social.isNotEmpty) ...[
-          SliverToBoxAdapter(child: Padding(padding: const EdgeInsets.fromLTRB(22, 26, 22, 10), child: Text('Follow us', style: TextStyle(color: ink, fontSize: 17, fontWeight: FontWeight.w800)))),
+          SliverToBoxAdapter(child: Padding(padding: const EdgeInsets.fromLTRB(22, 26, 22, 10), child: Text(tr('Follow us'), style: TextStyle(color: ink, fontSize: 17, fontWeight: FontWeight.w800)))),
           SliverPadding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 30),
             sliver: SliverGrid.count(
@@ -1625,26 +1811,61 @@ class _DotsState extends State<_Dots> with SingleTickerProviderStateMixin {
 }
 
 class _OfflineView extends StatelessWidget {
-  const _OfflineView({required this.color, required this.title, required this.text, required this.onRetry});
+  const _OfflineView({required this.color, required this.title, required this.text, required this.onRetry, this.image = '', this.icon = Icons.wifi_off_rounded, this.button});
   final Color color;
-  final String title;
-  final String text;
+  final String title, text, image;
+  final IconData icon;
+  final String? button;
   final VoidCallback onRetry;
   @override
   Widget build(BuildContext context) {
+    final accent = color.computeLuminance() < .05 ? const Color(0xFF0F172A) : color;
     return Container(
       color: Colors.white,
       alignment: Alignment.center,
       padding: const EdgeInsets.all(32),
       child: Column(mainAxisSize: MainAxisSize.min, children: [
-        Icon(Icons.wifi_off_rounded, size: 64, color: color),
-        const SizedBox(height: 16),
-        Text(title, textAlign: TextAlign.center, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
+        if (image.isNotEmpty)
+          ClipRRect(borderRadius: BorderRadius.circular(20), child: Image.network(image, height: 180, fit: BoxFit.contain, errorBuilder: (_, __, ___) => Icon(icon, size: 64, color: accent)))
+        else
+          Container(width: 110, height: 110, decoration: BoxDecoration(color: accent.withOpacity(.1), shape: BoxShape.circle), child: Icon(icon, size: 50, color: accent)),
+        const SizedBox(height: 22),
+        Text(title, textAlign: TextAlign.center, style: const TextStyle(fontSize: 21, fontWeight: FontWeight.w800, color: Color(0xFF0F172A))),
         const SizedBox(height: 8),
-        Text(text, textAlign: TextAlign.center),
-        const SizedBox(height: 24),
-        FilledButton(style: FilledButton.styleFrom(backgroundColor: color), onPressed: onRetry, child: const Text('Try again')),
+        Text(text, textAlign: TextAlign.center, style: const TextStyle(color: Color(0xFF64748B), height: 1.5)),
+        const SizedBox(height: 26),
+        FilledButton(style: FilledButton.styleFrom(backgroundColor: accent, minimumSize: const Size(180, 50), shape: const StadiumBorder()), onPressed: onRetry, child: Text(button ?? tr('Try again'))),
       ]),
     );
   }
+}
+
+/// Grey placeholder blocks that shimmer while a page loads.
+class _Skeleton extends StatefulWidget {
+  const _Skeleton();
+  @override
+  State<_Skeleton> createState() => _SkeletonState();
+}
+
+class _SkeletonState extends State<_Skeleton> with SingleTickerProviderStateMixin {
+  late final AnimationController _a = AnimationController(vsync: this, duration: const Duration(milliseconds: 1200))..repeat();
+  @override
+  void dispose() {
+    _a.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Container(
+        color: Colors.white,
+        padding: const EdgeInsets.all(18),
+        child: AnimatedBuilder(
+          animation: _a,
+          builder: (_, __) {
+            final g = LinearGradient(begin: Alignment(-1 + 2 * _a.value - .5, 0), end: Alignment(-1 + 2 * _a.value + .5, 0), colors: const [Color(0xFFEDF0F5), Color(0xFFF8FAFC), Color(0xFFEDF0F5)]);
+            Widget b(double h, [double w = double.infinity]) => Container(height: h, width: w, margin: const EdgeInsets.only(bottom: 14), decoration: BoxDecoration(gradient: g, borderRadius: BorderRadius.circular(14)));
+            return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [b(170), b(18, 220), b(14), b(14, 260), Row(children: [Expanded(child: b(120)), const SizedBox(width: 14), Expanded(child: b(120))]), b(14), b(14, 200)]);
+          },
+        ),
+      );
 }
